@@ -1,0 +1,77 @@
+---
+interface Props {
+	name: string;
+	bio: string;
+	avatar: string;
+	socialLinks: {
+		github?: string;
+		twitter?: string;
+		linkedin?: string;
+	};
+}
+
+const { name, bio, avatar, socialLinks } = Astro.props;
+const links = Object.entries(socialLinks).filter(([, url]) => url);
+---
+
+<aside class="author-bio" aria-labelledby="author-heading">
+	<img class="author-avatar" src={avatar} alt={`${name}'s avatar`} width="96" height="96" />
+	<div class="author-details">
+		<p class="author-label" id="author-heading">About the author</p>
+		<h2>{name}</h2>
+		<p>{bio}</p>
+		{links.length > 0 && (
+			<nav aria-label={`${name}'s social links`}>
+				<ul>
+					{links.map(([network, url]) => (
+						<li><a href={url} target="_blank" rel="noopener noreferrer">{network}</a></li>
+					))}
+				</ul>
+			</nav>
+		)}
+	</div>
+</aside>
+
+<style>
+	.author-bio {
+		display: flex;
+		gap: 1.25rem;
+		margin-top: 4rem;
+		padding-top: 2rem;
+		border-top: 1px solid rgb(var(--gray-light));
+	}
+	.author-avatar {
+		flex: 0 0 auto;
+		border-radius: 50%;
+		object-fit: cover;
+	}
+	.author-details h2,
+	.author-details p {
+		margin-top: 0;
+	}
+	.author-label {
+		margin-bottom: 0.25rem;
+		color: rgb(var(--gray));
+		font-size: 0.8em;
+		font-weight: 700;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+	.author-details h2 {
+		font-size: 1.5em;
+	}
+	.author-details nav ul {
+		display: flex;
+		gap: 1rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+		font-size: 0.9em;
+	}
+	@media (max-width: 480px) {
+		.author-bio {
+			align-items: flex-start;
+			flex-direction: column;
+		}
+	}
+</style>
