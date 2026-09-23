@@ -10,7 +10,8 @@
     "build": "astro build",
     "preview": "astro preview",
     "astro": "astro",
-    "lint": "eslint . --ext .js,.mjs,.ts,.astro"
+    "lint": "eslint . --ext .js,.mjs,.ts,.astro",
+    "test:unit": "vitest run"
   },
   "dependencies": {
     "@astrojs/mdx": "^8.0.1",
@@ -26,6 +27,7 @@
     "eslint": "^10.11.0",
     "eslint-plugin-astro": "^3.2.1",
     "jiti": "^2.7.0",
-    "typescript-eslint": "^8.70.0"
+    "typescript-eslint": "^8.70.0",
+    "vitest": "^5.0.1"
   }
 }
