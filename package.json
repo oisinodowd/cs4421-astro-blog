@@ -11,7 +11,7 @@
     "preview": "astro preview",
     "astro": "astro",
     "lint": "eslint . --ext .js,.mjs,.ts,.astro",
-    "test:unit": "vitest run"
+    "test:unit": "vitest run src"
   },
   "dependencies": {
     "@astrojs/mdx": "^8.0.1",
