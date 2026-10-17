@@ -30,6 +30,6 @@
     "@typescript-eslint/parser": "^8.70.0",
     "eslint": "^10.11.0",
     "eslint-plugin-astro": "^1.7.0",
-    "vitest": "^5.0.1"
+    "vitest": "^5.0.4"
   }
 }
