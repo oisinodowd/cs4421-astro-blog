@@ -1,0 +1,14 @@
+---
+export const prerender = false;
+const now = new Date().toISOString();
+const nodeEnv = process.env.NODE_ENV ?? 'development';
+---
+<html lang="en">
+  <head><title>Server time</title></head>
+  <body>
+    <h1>Rendered on the server</h1>
+    <p>Request time: {now}</p>
+    <p>NODE_ENV: {nodeEnv}</p>
+  </body>
+</html>
+
