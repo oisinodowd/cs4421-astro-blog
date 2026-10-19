@@ -1,11 +1,25 @@
-# To get started with Dependabot version updates, you'll need to specify which
-# package ecosystems to update and where the package manifests are located.
-# Please see the documentation for all configuration options:
-# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
-
 version: 2
 updates:
+  # Root app dependencies (Astro, Vitest, ESLint, ...)
   - package-ecosystem: "npm"
-    directory: "/" # Location of package manifests
+    directory: "/"
     schedule:
       interval: "daily"
+ 
+  # CDK infrastructure dependencies (aws-cdk-lib — your riskiest deps)
+  - package-ecosystem: "npm"
+    directory: "/cdk"
+    schedule:
+      interval: "daily"
+ 
+  # GitHub Actions versions used in workflows
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+ 
+  # Docker base images (covers node:24-alpine once your Dockerfile exists)
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
