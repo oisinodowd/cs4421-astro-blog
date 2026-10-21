@@ -1,0 +1,11 @@
+node_modules
+dist
+.git
+.github
+.astro
+.vscode
+cdk/node_modules
+cdk/cdk.out
+cdk/cdk.context.json
+*.log
+.env*
