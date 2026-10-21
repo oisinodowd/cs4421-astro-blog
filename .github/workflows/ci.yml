@@ -24,3 +24,28 @@ jobs:
           npm run lint
           npm run check
           npm run test:unit
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t blog:test .
+      - name: Boot container
+        run: docker run -d --name blog -p 4321:4321 blog:test
+      - name: Wait for healthy
+        run: |
+          for i in $(seq 1 30); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' blog)
+            [ "$status" = "healthy" ] && exit 0
+            sleep 2
+          done
+          docker logs blog
+          exit 1
+      - name: Assert SSR and NODE_ENV observable
+        run: |
+          a=$(curl -sf localhost:4321/api/health)
+          sleep 1
+          b=$(curl -sf localhost:4321/api/health)
+          [ "$a" != "$b" ] || { echo "timestamps identical — not SSR"; exit 1; }
+          echo "$b" | grep -q '"nodeEnv":"production"'
