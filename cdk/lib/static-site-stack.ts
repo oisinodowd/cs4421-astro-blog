@@ -8,7 +8,7 @@ export class StaticSiteStack extends cdk.Stack {
   constructor(scope: cdk.App, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
     const siteBucket = new s3.Bucket(this, 'SiteBucket', {
-    removalPolicy: cdk.RemovalPolicy.DESTROY,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
     });
 
@@ -39,10 +39,14 @@ function handler(event) {
     });
 
     new s3deploy.BucketDeployment(this, 'DeploySite', {
-      sources: [s3deploy.Source.asset('./../dist')],
+      sources: [s3deploy.Source.asset('./../dist/client')],
       destinationBucket: siteBucket,
       distribution,
       distributionPaths: ['/*'], // Automatic CloudFront CDN cache invalidation!
+    });
+
+    new cdk.CfnOutput(this, 'CdnUrl', {
+      value: `https://${distribution.distributionDomainName}`,
     });
   }
 }

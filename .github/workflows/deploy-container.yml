@@ -1,0 +1,53 @@
+name: Deploy Container to AWS
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Quality gate
+        run: |
+          npm ci
+          npm run lint
+          npm run check
+          npm run test:unit -- --run
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        id: login_ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag and push image
+        env:
+          ECR_REGISTRY: ${{ steps.login_ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build --platform linux/amd64 -t "$ECR_REGISTRY/astro-blog:$IMAGE_TAG" .
+          docker tag "$ECR_REGISTRY/astro-blog:$IMAGE_TAG" "$ECR_REGISTRY/astro-blog:latest"
+          docker push "$ECR_REGISTRY/astro-blog:$IMAGE_TAG"
+          docker push "$ECR_REGISTRY/astro-blog:latest"
+
+      - name: Deploy to Amazon ECS
+        run: |
+          aws ecs update-service --cluster BlogCluster --service BlogService --force-new-deployment
+          aws ecs wait services-stable --cluster BlogCluster --services BlogService
+
+      - name: Post-deploy health check
+        run: |
+          APP_URL=$(aws cloudformation describe-stacks --stack-name EcsServiceStack \
+            --query "Stacks[0].Outputs[?OutputKey=='AppUrl'].OutputValue" --output text)
+          echo "Checking $APP_URL/api/health"
+          curl -sf --retry 10 --retry-delay 5 --retry-all-errors "$APP_URL/api/health"
