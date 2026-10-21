@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib/core';
 import { StaticSiteStack } from '../lib/static-site-stack';
+import { EcsServiceStack } from '../lib/ecs-service-stack';
 
 const app = new cdk.App();
 new StaticSiteStack(app, 'StaticSiteStack', {
@@ -17,4 +18,8 @@ new StaticSiteStack(app, 'StaticSiteStack', {
   env: { account: '678360599804', region: 'us-east-1' },
 
   /* For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html */
+});
+
+new EcsServiceStack(app, 'EcsServiceStack', {
+  env: { account: '678360599804', region: 'us-east-1' },
 });
