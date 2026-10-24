@@ -33,3 +33,41 @@ jobs:
       - name: Run container smoke test
         run: ./scripts/smoke-container.sh blog:ci
 
+  infra:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'npm'
+          # Cache both the application and the CDK dependency trees
+          cache-dependency-path: |
+            package-lock.json
+            cdk/package-lock.json
+
+      - name: Install Project Dependencies
+        run: npm ci
+
+      # StaticSiteStack embeds dist/client as its deployment asset, so the site
+      # has to be built before the stacks can synthesise.
+      - name: Build Static Site
+        run: npm run build
+
+      - name: Install CDK Dependencies
+        working-directory: cdk
+        run: npm ci
+
+      - name: Run CDK Tests
+        working-directory: cdk
+        run: npm test
+
+      # No AWS credentials in CI: the availability-zone lookup EcsServiceStack
+      # needs is pinned in cdk.json, so the whole app synthesises offline.
+      - name: Synthesise CDK Stacks
+        working-directory: cdk
+        run: npx cdk synth
+
