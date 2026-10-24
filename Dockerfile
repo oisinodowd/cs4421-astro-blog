@@ -21,6 +21,13 @@ WORKDIR /app
 COPY package.json ./
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
+# Production runs the app, it never installs anything - so drop the package
+# managers. npm and corepack ship their own bundled dependencies (undici,
+# brace-expansion), which the Trivy gate reports as fixable HIGH CVEs that no
+# change in this repo can patch. Removing them shrinks the attack surface too.
+RUN rm -rf /usr/local/lib/node_modules/npm \
+           /usr/local/lib/node_modules/corepack \
+           /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
 RUN mkdir -p /app/.astro/sessions && chown -R node:node /app
 USER node
 EXPOSE 4321

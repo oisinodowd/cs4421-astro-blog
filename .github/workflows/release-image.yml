@@ -1,7 +1,7 @@
 name: Release Image
 
-# Publishing pipeline: every commit on main is validated, built, tagged and
-# pushed to ECR here. deploy-container.yml waits for this run to succeed, so
+# Publishing pipeline: every commit on main is validated, built, scanned, tagged
+# and pushed to ECR here. deploy-container.yml waits for this run to succeed, so
 # what gets deployed is exactly the image this pipeline published.
 on:
   push:
@@ -33,8 +33,15 @@ jobs:
         id: login_ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, tag and push image
-        id: release
+      # Installed before the build so a broken scanner fails the run in seconds
+      # instead of after a two-minute image build.
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@v0.3.1
+        with:
+          version: v0.76.1
+
+      - name: Build image
+        id: build
         env:
           ECR_REGISTRY: ${{ steps.login_ecr.outputs.registry }}
         run: |
@@ -43,7 +50,7 @@ jobs:
           version="v$(node -p "require('./package.json').version")"
           image="$ECR_REGISTRY/astro-blog"
 
-          echo "Releasing $version (sha-$short_sha) of $GITHUB_SHA"
+          echo "Building $version (sha-$short_sha) of $GITHUB_SHA"
 
           # Release tags (semver + short sha) plus `latest`, which is the tag the
           # ECS task definition pulls. Full SHA lands as an OCI label as well, so
@@ -57,14 +64,52 @@ jobs:
             -t "$image:sha-$short_sha" \
             -t "$image:latest" .
 
-          for tag in "$version" "sha-$short_sha" "latest"; do
-            docker push "$image:$tag"
-          done
-
-          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$image:$version")
           {
+            echo "image=$image"
             echo "version=$version"
             echo "short_sha=$short_sha"
+          } >> "$GITHUB_OUTPUT"
+
+      # Supply-chain gate: nothing reaches the registry until this passes. The
+      # image is exported to a tar so Trivy reads exactly the bytes that would
+      # be pushed, rather than re-resolving a tag from a registry.
+      - name: Scan image
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+          VERSION: ${{ steps.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker save "$IMAGE:$VERSION" -o "$RUNNER_TEMP/image.tar"
+
+          # --ignore-unfixed: a CVE with no patched package cannot be remediated
+          # by anything we do here, so it would block releases forever. Those are
+          # reported by `npm audit` instead; the gate is for fixable risk.
+          trivy image \
+            --input "$RUNNER_TEMP/image.tar" \
+            --scanners vuln \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --no-progress \
+            --exit-code 1
+
+      - name: Push image
+        id: release
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+          VERSION: ${{ steps.build.outputs.version }}
+          SHORT_SHA: ${{ steps.build.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+
+          # The scan has passed, so the exact bytes it approved are what ship.
+          for tag in "$VERSION" "sha-$SHORT_SHA" "latest"; do
+            docker push "$IMAGE:$tag"
+          done
+
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$VERSION")
+          {
+            echo "version=$VERSION"
+            echo "short_sha=$SHORT_SHA"
             echo "digest=$digest"
           } >> "$GITHUB_OUTPUT"
 
@@ -77,5 +122,6 @@ jobs:
             echo "|---|---|"
             echo "| Commit | \`$GITHUB_SHA\` |"
             echo "| Tags | \`${{ steps.release.outputs.version }}\`, \`sha-${{ steps.release.outputs.short_sha }}\`, \`latest\` |"
+            echo "| Scan | no fixable CRITICAL/HIGH vulnerabilities |"
             echo "| Digest | \`${{ steps.release.outputs.digest }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
