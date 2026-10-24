@@ -4,9 +4,18 @@ import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 
+export interface StaticSiteStackProps extends cdk.StackProps {
+  /**
+   * Local directory whose contents are uploaded to the bucket.
+   * Overridable so unit tests can synth without a full Astro build.
+   */
+  siteAssetPath?: string;
+}
+
 export class StaticSiteStack extends cdk.Stack {
-  constructor(scope: cdk.App, id: string, props?: cdk.StackProps) {
+  constructor(scope: cdk.App, id: string, props: StaticSiteStackProps = {}) {
     super(scope, id, props);
+    const { siteAssetPath = './../dist/client' } = props;
     const siteBucket = new s3.Bucket(this, 'SiteBucket', {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
@@ -39,7 +48,7 @@ function handler(event) {
     });
 
     new s3deploy.BucketDeployment(this, 'DeploySite', {
-      sources: [s3deploy.Source.asset('./../dist/client')],
+      sources: [s3deploy.Source.asset(siteAssetPath)],
       destinationBucket: siteBucket,
       distribution,
       distributionPaths: ['/*'], // Automatic CloudFront CDN cache invalidation!
