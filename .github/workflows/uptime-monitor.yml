@@ -1,0 +1,142 @@
+name: Uptime Monitor
+
+# Operational monitoring (ticket #44). Every 15 minutes, probe the live ECS
+# health endpoint. A failed probe opens one `incident` issue and fails the run;
+# repeated failures reuse that issue instead of opening one every 15 minutes,
+# and the first successful probe comments on it and closes it.
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+# Least privilege: reading the repository for the probe script, writing issues
+# for the incident lifecycle. No contents, packages or deployments access.
+permissions:
+  contents: read
+  issues: write
+
+# A slow run should not overlap the next scheduled probe and race on the
+# incident issue.
+concurrency:
+  group: uptime-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      # Resolve the URL the same way the deploy does, so a recreated stack does
+      # not leave the monitor probing an old ALB DNS name.
+      - name: Resolve live URL
+        id: live
+        run: |
+          set -euo pipefail
+          APP_URL=$(aws cloudformation describe-stacks --stack-name EcsServiceStack \
+            --query "Stacks[0].Outputs[?OutputKey=='AppUrl'].OutputValue" --output text)
+          if [ -z "$APP_URL" ] || [ "$APP_URL" = "None" ]; then
+            echo "FAIL: EcsServiceStack has no AppUrl output" >&2
+            exit 1
+          fi
+          echo "url=$APP_URL" >> "$GITHUB_OUTPUT"
+          echo "Target: $APP_URL"
+
+      # continue-on-error keeps the incident steps reachable; the final step
+      # restores the red run so a failed probe is still visible in Actions.
+      - name: Probe /api/health
+        id: probe
+        continue-on-error: true
+        env:
+          APP_URL: ${{ steps.live.outputs.url }}
+        run: |
+          set -o pipefail
+          bash scripts/uptime-check.sh "$APP_URL" 2>&1 | tee "$RUNNER_TEMP/probe.log"
+
+      - name: Open incident
+        if: steps.probe.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_URL: ${{ steps.live.outputs.url }}
+        run: |
+          set -euo pipefail
+
+          # Self-contained on a fresh repository; --force also keeps the label
+          # metadata correct if it already exists.
+          gh label create incident \
+            --color B60205 \
+            --description "Automated uptime monitor alert" \
+            --force
+
+          existing=$(gh issue list \
+            --label incident \
+            --state open \
+            --limit 100 \
+            --json number,title \
+            --jq '[.[] | select(.title | startswith("Uptime incident")) | .number][0] // empty')
+
+          if [ -n "$existing" ]; then
+            echo "Incident #$existing is already open; not opening another."
+            exit 0
+          fi
+
+          {
+            echo "The uptime monitor could not get a healthy response from the live ECS deployment."
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Target | \`$APP_URL/api/health\` |"
+            echo "| Detected (UTC) | \`$(date -u +%Y-%m-%dT%H:%M:%SZ)\` |"
+            echo "| Workflow run | $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID |"
+            echo "| Commit | \`$GITHUB_SHA\` |"
+            echo ""
+            echo "Probe output:"
+            echo ""
+            echo '```'
+            cat "$RUNNER_TEMP/probe.log"
+            echo '```'
+            echo ""
+            echo "This issue closes automatically on the first successful probe."
+          } > "$RUNNER_TEMP/incident.md"
+
+          gh issue create \
+            --title "Uptime incident: /api/health is failing" \
+            --label incident \
+            --body-file "$RUNNER_TEMP/incident.md"
+
+      - name: Close recovered incident
+        if: steps.probe.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          incidents=$(gh issue list \
+            --label incident \
+            --state open \
+            --limit 100 \
+            --json number,title \
+            --jq '[.[] | select(.title | startswith("Uptime incident")) | .number] | join(" ")')
+
+          if [ -z "$incidents" ]; then
+            echo "No open incident; nothing to close."
+            exit 0
+          fi
+
+          for number in $incidents; do
+            gh issue close "$number" --comment \
+              "Recovered: /api/health returned 200 with status ok at $(date -u +%Y-%m-%dT%H:%M:%SZ) (run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
+          done
+
+      - name: Fail the run on a failed probe
+        if: steps.probe.outcome == 'failure'
+        run: exit 1
