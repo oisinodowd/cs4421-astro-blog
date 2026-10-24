@@ -1,0 +1,81 @@
+name: Release Image
+
+# Publishing pipeline: every commit on main is validated, built, tagged and
+# pushed to ECR here. deploy-container.yml waits for this run to succeed, so
+# what gets deployed is exactly the image this pipeline published.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # The same reusable gate the pull request had to pass.
+  quality-gate:
+    uses: ./.github/workflows/ci.yml
+
+  build-and-push:
+    needs: quality-gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        id: login_ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag and push image
+        id: release
+        env:
+          ECR_REGISTRY: ${{ steps.login_ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          short_sha="${GITHUB_SHA::7}"
+          version="v$(node -p "require('./package.json').version")"
+          image="$ECR_REGISTRY/astro-blog"
+
+          echo "Releasing $version (sha-$short_sha) of $GITHUB_SHA"
+
+          # Release tags (semver + short sha) plus `latest`, which is the tag the
+          # ECS task definition pulls. Full SHA lands as an OCI label as well, so
+          # the image carries its own provenance.
+          docker build --platform linux/amd64 \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=$version" \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -t "$image:$version" \
+            -t "$image:sha-$short_sha" \
+            -t "$image:latest" .
+
+          for tag in "$version" "sha-$short_sha" "latest"; do
+            docker push "$image:$tag"
+          done
+
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$image:$version")
+          {
+            echo "version=$version"
+            echo "short_sha=$short_sha"
+            echo "digest=$digest"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Summarise release
+        run: |
+          {
+            echo "### Released image"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Commit | \`$GITHUB_SHA\` |"
+            echo "| Tags | \`${{ steps.release.outputs.version }}\`, \`sha-${{ steps.release.outputs.short_sha }}\`, \`latest\` |"
+            echo "| Digest | \`${{ steps.release.outputs.digest }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

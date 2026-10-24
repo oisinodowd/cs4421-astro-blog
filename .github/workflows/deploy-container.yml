@@ -1,22 +1,28 @@
 name: Deploy Container to AWS
+
+# Chained off the release pipeline rather than the raw push: the deploy only
+# runs once the validated image for that commit exists in ECR.
 on:
-  push:
+  workflow_run:
+    workflows: ["Release Image"]
+    types: [completed]
     branches: [main]
 
 permissions:
   contents: read
 
 jobs:
-  # The identical gate the pull request had to pass, re-run against the exact
-  # commit being released.
-  quality-gate:
-    uses: ./.github/workflows/ci.yml
-
-  build-and-deploy:
-    needs: quality-gate
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Show released commit
+        env:
+          RELEASED_SHA: ${{ github.event.workflow_run.head_sha }}
+          RELEASE_RUN: ${{ github.event.workflow_run.html_url }}
+        run: |
+          echo "Deploying the image released for $RELEASED_SHA"
+          echo "Release run: $RELEASE_RUN"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -24,20 +30,6 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
-
-      - name: Login to Amazon ECR
-        id: login_ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build, tag and push image
-        env:
-          ECR_REGISTRY: ${{ steps.login_ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          docker build --platform linux/amd64 -t "$ECR_REGISTRY/astro-blog:$IMAGE_TAG" .
-          docker tag "$ECR_REGISTRY/astro-blog:$IMAGE_TAG" "$ECR_REGISTRY/astro-blog:latest"
-          docker push "$ECR_REGISTRY/astro-blog:$IMAGE_TAG"
-          docker push "$ECR_REGISTRY/astro-blog:latest"
 
       - name: Deploy to Amazon ECS
         run: |
