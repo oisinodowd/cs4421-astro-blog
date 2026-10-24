@@ -14,6 +14,15 @@ permissions:
 jobs:
   deploy:
     if: github.event.workflow_run.conclusion == 'success'
+    # Manual gate. The `production` environment requires a reviewer, so the job
+    # parks here without holding a runner until a human approves it in the
+    # Actions UI. Approving records who released which commit to production.
+    #
+    # The gate is on the deploy, not the push: by the time this job starts the
+    # image has been gated, scanned and published, so the reviewer is approving
+    # a specific digest against a real scan result rather than a hopeful build.
+    environment:
+      name: production
     runs-on: ubuntu-latest
     steps:
       - name: Show released commit
