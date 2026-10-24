@@ -20,3 +20,6 @@
 
 - Semver tags: v1.0.0, v1.1.0, ...
 - Every image also tagged sha-<shortsha> for traceability.
+- Merging to `main` publishes the image automatically; the ECS rollout is gated by the
+  `production` environment and waits for a reviewer to approve it in the Actions UI.
+  Nothing reaches production without that approval.
