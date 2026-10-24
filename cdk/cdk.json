@@ -98,6 +98,14 @@
     "@aws-cdk/aws-lambda:useCdkManagedLogGroup": true,
     "@aws-cdk/aws-elasticloadbalancingv2:networkLoadBalancerWithSecurityGroupByDefault": true,
     "@aws-cdk/aws-ecs-patterns:uniqueTargetGroupId": true,
-    "@aws-cdk/aws-route53-patterns:useDistribution": true
+    "@aws-cdk/aws-route53-patterns:useDistribution": true,
+    "availability-zones:account=678360599804:region=us-east-1": [
+      "us-east-1a",
+      "us-east-1b",
+      "us-east-1c",
+      "us-east-1d",
+      "us-east-1e",
+      "us-east-1f"
+    ]
   }
 }
