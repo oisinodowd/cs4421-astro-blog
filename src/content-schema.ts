@@ -31,9 +31,9 @@ export const authorsSchema = z.object({
 	avatar: z.string(),
 	socialLinks: z
 		.object({
-			github: z.string().url().optional(),
-			twitter: z.string().url().optional(),
-			linkedin: z.string().url().optional(),
+			github: z.url().optional(),
+			twitter: z.url().optional(),
+			linkedin: z.url().optional(),
 		})
 		.default({}),
 });
