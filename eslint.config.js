@@ -34,4 +34,12 @@ export default [
       parser: tsParser,
     },
   },
+
+  // Node CLI scripts in scripts/ report their results on stdout/stderr by design.
+  {
+    files: ["scripts/**/*.{js,mjs,cjs}"],
+    rules: {
+      "no-console": "off",
+    },
+  },
 ]

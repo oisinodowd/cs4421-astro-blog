@@ -25,6 +25,12 @@ jobs:
           npm run check
           npm run test:unit
 
+      - name: Build Static Site
+        run: npm run build
+
+      - name: Validate Build Output
+        run: npm run validate:build
+
 
   container:
     runs-on: ubuntu-latest
