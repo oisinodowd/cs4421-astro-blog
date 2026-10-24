@@ -1,11 +1,11 @@
 # ---- Stage 1: production dependencies ----
-FROM node:24-alpine AS deps
+FROM node:25-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
  
 # ---- Stage 2: build (dist/client + dist/server) ----
-FROM node:24-alpine AS builder
+FROM node:25-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -13,7 +13,7 @@ COPY . .
 RUN npm run build
  
 # ---- Stage 3: runtime — server-side compute ----
-FROM node:24-alpine AS runtime
+FROM node:25-alpine AS runtime
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=4321
