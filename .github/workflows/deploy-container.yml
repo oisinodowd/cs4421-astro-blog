@@ -14,8 +14,20 @@ permissions:
 jobs:
   deploy:
     if: github.event.workflow_run.conclusion == 'success'
+    # Manual gate. The `production` environment requires a reviewer, so the job
+    # parks here without holding a runner until a human approves it in the
+    # Actions UI. Approving records who released which commit to production.
+    #
+    # The gate is on the deploy, not the push: by the time this job starts the
+    # image has been gated, scanned and published, so the reviewer is approving
+    # a specific digest against a real scan result rather than a hopeful build.
+    environment:
+      name: production
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v7
+
       - name: Show released commit
         env:
           RELEASED_SHA: ${{ github.event.workflow_run.head_sha }}
@@ -25,7 +37,7 @@ jobs:
           echo "Release run: $RELEASE_RUN"
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -36,9 +48,17 @@ jobs:
           aws ecs update-service --cluster BlogCluster --service BlogService --force-new-deployment
           aws ecs wait services-stable --cluster BlogCluster --services BlogService
 
-      - name: Post-deploy health check
+      # Regression gate on the live environment: proves the rollout is actually
+      # serving, and that it renders per request rather than handing back
+      # prerendered or cached bytes. Fails the deploy if either check regresses.
+      - name: Post-deploy smoke test
         run: |
+          set -euo pipefail
           APP_URL=$(aws cloudformation describe-stacks --stack-name EcsServiceStack \
             --query "Stacks[0].Outputs[?OutputKey=='AppUrl'].OutputValue" --output text)
-          echo "Checking $APP_URL/api/health"
-          curl -sf --retry 10 --retry-delay 5 --retry-all-errors "$APP_URL/api/health"
+          if [ -z "$APP_URL" ] || [ "$APP_URL" = "None" ]; then
+            echo "FAIL: EcsServiceStack has no AppUrl output" >&2
+            exit 1
+          fi
+          echo "Target: $APP_URL"
+          bash scripts/smoke-deploy.sh "$APP_URL"
