@@ -16,6 +16,15 @@ name: Deploy Static Site via AWS CDK
 # synthesised StaticSiteStack template). That is why this workflow also has a
 # manual trigger: dispatch it to deploy deliberately after such a change,
 # rather than making every dependency merge redeploy by default.
+#
+# The filter covers the file sets Dependabot's four ecosystems actually move: the
+# npm manifests and lockfiles, the action versions under .github, and the
+# container base image. None of them can change what CloudFront serves, and each
+# produced a deploy during the last dependency wave.
+#
+# It stays an ignore-list rather than becoming an allow-list of content paths,
+# deliberately: an ignore-list fails open with a deploy nobody needed, an
+# allow-list fails closed with a content change that silently never deploys.
 on:
   push:
     branches: [main]
@@ -24,6 +33,8 @@ on:
       - 'package-lock.json'
       - 'cdk/package.json'
       - 'cdk/package-lock.json'
+      - '.github/**'
+      - 'Dockerfile'
   workflow_dispatch:
 
 jobs:
