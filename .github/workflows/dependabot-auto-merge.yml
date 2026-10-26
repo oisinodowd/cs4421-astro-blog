@@ -1,0 +1,124 @@
+name: Auto-merge Dependabot patches
+
+# Ticket #72. A patch-level dependency update merges itself once the same
+# three-job gate a reviewer would wait for has passed. Everything else is left
+# for a human: minors, majors, and anything whose update level cannot be read.
+# A green pipeline is not the same thing as a correct change — `node:25-alpine`
+# passed every job and was still the wrong upgrade, so the judgement the gate
+# cannot make is made here, and made conservatively: only a readable patch level
+# merges.
+#
+# This waits for the gate's completion instead of using GitHub's auto-merge
+# (`gh pr merge --auto`). `main` requires no status checks, so `--auto` would
+# merge as soon as the pull request was mergeable — while `infra` was still
+# running, and possibly before `container` had even started. Waiting for the run
+# keeps the decision here, where all three jobs have to be green.
+on:
+  workflow_run:
+    workflows: ["Continuous Integration"]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    # Only a gate run that came from a pull request and passed. A failed run, or
+    # a push run on main, is never a reason to merge anything.
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Deliberately no `ref`: this checks out the default branch, so the
+      # decision script is always the reviewed one and a pull request cannot
+      # change the code that decides whether to merge it.
+      - name: Checkout Source Code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js Runtime
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Find the pull request the gate ran on
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          pr=$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/pulls" \
+            --jq '[.[] | select(.state == "open")][0].number // empty')
+          if [ -z "$pr" ]; then
+            echo "No open pull request has $HEAD_SHA as its head; nothing to merge."
+            exit 0
+          fi
+
+          # The commit the gate ran on has to still be the pull request's head:
+          # if a further commit landed afterwards, the gate says nothing about it.
+          head=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr" --jq .head.sha)
+          if [ "$head" != "$HEAD_SHA" ]; then
+            echo "PR #$pr moved on to $head after the gate ran on $HEAD_SHA; leaving it for review."
+            exit 0
+          fi
+
+          author=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr" --jq .user.login)
+          case "$author" in
+            "dependabot[bot]" | "app/dependabot") ;;
+            *)
+              echo "PR #$pr was opened by $author, not Dependabot; leaving it for review."
+              exit 0
+              ;;
+          esac
+
+          echo "number=$pr" >> "$GITHUB_OUTPUT"
+
+      - name: Read the update level from the commits
+        id: level
+        if: steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+
+          # Only Dependabot's own commits count. A branch edited by hand carries
+          # a change this workflow did not classify, so it is not auto-merged.
+          authors=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/commits" \
+            --jq '[.[].author.login] | unique | join(",")')
+          if [ "$authors" != "dependabot[bot]" ]; then
+            echo "PR #$PR has commits from [$authors]; only untouched Dependabot branches are auto-merged."
+            echo "level=unknown" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The trailer the level is read from lives in the commit messages, not
+          # in the pull request body.
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/commits" \
+            --jq '.[] | .commit.message' > "$RUNNER_TEMP/commits.txt"
+
+          level=$(node scripts/dependabot-update-level.mjs "$RUNNER_TEMP/commits.txt")
+          echo "level=$level" >> "$GITHUB_OUTPUT"
+
+      - name: Merge a patch update
+        if: steps.pr.outputs.number != '' && steps.level.outputs.level == 'patch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.pr.outputs.number }}
+          GATED_SHA: ${{ github.event.workflow_run.head_sha }}
+          GATE_RUN: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+
+          # A merge commit, the way every other change has landed on main.
+          gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --merge
+
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" \
+            --body "Auto-merged: every dependency in this update is a patch-level bump, and \`validate\`, \`container\` and \`infra\` all passed on \`$GATED_SHA\` — see the gate run at $GATE_RUN. Minors, majors and updates Dependabot cannot classify are left for review; the policy is in CONTRIBUTING.md."
+
+      - name: Leave everything else for review
+        if: steps.pr.outputs.number != '' && steps.level.outputs.level != 'patch'
+        run: |
+          echo "PR #${{ steps.pr.outputs.number }} is a '${{ steps.level.outputs.level }}' update; left for review."
