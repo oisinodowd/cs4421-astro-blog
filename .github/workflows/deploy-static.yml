@@ -1,7 +1,30 @@
 name: Deploy Static Site via AWS CDK
+
+# Production deploy of the S3 + CloudFront site.
+#
+# Dependency-only pushes do not deploy. A lockfile or manifest bump is not a
+# content change, and before this filter the Dependabot wave produced nine
+# CloudFront deploys in four minutes with nothing new to serve — a dependency
+# merge should not have the same production effect as a code change.
+#
+# The gate is unaffected: release-image.yml still runs `validate`, `container`
+# and `infra` for every commit on main, including the ones skipped here. Only
+# the deploy is skipped.
+#
+# Trade-off: a dependency bump can in principle change what is served (a new
+# Astro version altering the built output, or a CDK library bump altering the
+# synthesised StaticSiteStack template). That is why this workflow also has a
+# manual trigger: dispatch it to deploy deliberately after such a change,
+# rather than making every dependency merge redeploy by default.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'package.json'
+      - 'package-lock.json'
+      - 'cdk/package.json'
+      - 'cdk/package-lock.json'
+  workflow_dispatch:
 
 jobs:
   deploy:
