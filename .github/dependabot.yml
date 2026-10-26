@@ -1,24 +1,63 @@
 version: 2
 updates:
   # Root app dependencies (Astro, Vitest, ESLint, ...)
+  #
+  # Grouped so a run opens one pull request per risk area rather than one per
+  # package — the queue reached 13 open pull requests at once (ticket #72).
+  # `update-types` keeps majors out of the groups: they land individually, each
+  # with its own gate run and its own read, because a major bump is a migration
+  # rather than maintenance.
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
       interval: "daily"
- 
-  # CDK infrastructure dependencies (aws-cdk-lib — your riskiest deps)
+    groups:
+      astro:
+        patterns: ["astro", "@astrojs/*"]
+        update-types: ["minor", "patch"]
+      dev-tooling:
+        patterns:
+          - "@types/node"
+          - "@typescript-eslint/*"
+          - "eslint"
+          - "eslint-plugin-*"
+          - "typescript"
+          - "vitest"
+          - "yaml"
+        update-types: ["minor", "patch"]
+
+  # CDK infrastructure dependencies (aws-cdk-lib — the riskiest deps)
+  #
+  # The CLI and the library are one group on purpose: they are version-coupled,
+  # so a library bump used to sit blocked until a CLI that could read its
+  # cloud-assembly schema landed (ticket #69). Grouping moves the pair together.
   - package-ecosystem: "npm"
     directory: "/cdk"
     schedule:
       interval: "daily"
- 
+    groups:
+      cdk:
+        patterns: ["aws-cdk", "aws-cdk-lib", "constructs"]
+        update-types: ["minor", "patch"]
+      cdk-tooling:
+        patterns: ["@types/jest", "@types/node", "jest", "ts-jest", "ts-node", "typescript"]
+        update-types: ["minor", "patch"]
+
   # GitHub Actions versions used in workflows
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
- 
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
   # Docker base images (covers node:24-alpine once your Dockerfile exists)
+  #
+  # Left ungrouped: there is one image, and a tag like `24-alpine` is not semver,
+  # so a group with `update-types` could never match it. Base-image moves stay
+  # their own pull request and their own read.
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
