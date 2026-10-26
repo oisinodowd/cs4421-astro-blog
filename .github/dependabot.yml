@@ -14,9 +14,15 @@ updates:
     groups:
       astro:
         patterns: ["astro", "@astrojs/*"]
+        # The type-checker runs the gate, it does not render the site, so it is
+        # excluded here and grouped with the rest of the tooling: a checker
+        # patch should be readable on its own rather than inside a framework
+        # bump.
+        exclude-patterns: ["@astrojs/check"]
         update-types: ["minor", "patch"]
       dev-tooling:
         patterns:
+          - "@astrojs/check"
           - "@types/node"
           - "@typescript-eslint/*"
           - "eslint"
