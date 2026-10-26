@@ -27,9 +27,10 @@
 - Anything that is not a readable patch — a minor, a major, a base-image tag such as
   `24-alpine`, or a branch edited by hand — waits for a human. A green pipeline is not
   the same thing as a correct change.
-- A merge that only touches dependency manifests and lockfiles does not deploy the
-  static site. If such a change is expected to alter what is served, dispatch the
-  `Deploy Static Site via AWS CDK` workflow by hand.
+- A merge that only moves dependency inputs — the npm manifests and lockfiles, the
+  action versions under `.github`, the container base image in the `Dockerfile` — does
+  not deploy the static site. If such a change is expected to alter what is served,
+  dispatch the `Deploy Static Site via AWS CDK` workflow by hand.
 
 ## Releases (container image)
 
