@@ -18,8 +18,14 @@ on:
     workflows: ["Continuous Integration"]
     types: [completed]
 
+# Merging is a write to the repository's contents, so `contents: write` is
+# required alongside `pull-requests: write` for the confirmation comment. With
+# contents read-only the merge call is rejected with 403, which would leave this
+# workflow able to decline but never able to merge. Nothing else is granted: the
+# decision script is read from the default-branch checkout, so a pull request
+# cannot change the code that merges it.
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 jobs:
