@@ -1,0 +1,101 @@
+name: Apply Database Migrations
+
+# Schema changes are not applied from a laptop (#96). The migrations live in the
+# repository, so their delivery goes through the same manual gate the container
+# deploy uses: the `migrate` job parks on the `production` environment until a
+# reviewer approves it, which records who applied which commit to the database.
+#
+# The CLI is the one pinned in package-lock.json, the same binary and version a
+# developer runs for `supabase db reset`, so what a migration does locally is
+# what it does to production.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Deliberately outside the `production` environment, and therefore outside the
+  # approval: the whole job waits for approval when it carries the environment,
+  # so a check inside it cannot fail early. Everything here is a configuration
+  # mistake a reviewer is in no position to decide -- a missing secret, a
+  # placeholder password, a pooler that cannot run migrations, a host with no
+  # IPv4 route -- and each one is better reported in seconds than discovered
+  # halfway through an approved run.
+  verify-connection:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js Runtime
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # Costs nothing and needs no install: it reads the string and, for the
+      # direct connection host, its DNS.
+      - name: Check the connection string can work
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: node scripts/check-db-url.mjs
+
+      - name: Install Project Dependencies
+        run: npm ci
+
+      # The string looking right is not the same as the credentials working, and
+      # only the database can settle that. `migration list` is read-only, so the
+      # answer arrives before anyone has to approve an approval-gated write.
+      - name: Prove the credentials and the connection
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: npx supabase migration list --db-url "$SUPABASE_DB_URL" --output-format json > /dev/null
+
+  migrate:
+    needs: verify-connection
+    environment:
+      name: production
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js Runtime
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - name: Install Project Dependencies
+        run: npm ci
+
+      - name: Show the Supabase CLI version
+        run: npx supabase --version
+
+      # The two snapshots are what the summary is computed from. `--output-format
+      # json` keeps them machine-readable; the CLI's progress lines go to stderr.
+      - name: List migrations before the push
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          npx supabase migration list --db-url "$SUPABASE_DB_URL" --output-format json > "$RUNNER_TEMP/before.json"
+
+      - name: Push pending migrations
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          # `db push` asks for confirmation. </dev/null makes it read EOF and take
+          # its default (yes) rather than waiting for a terminal that is not there.
+          npx supabase db push --db-url "$SUPABASE_DB_URL" < /dev/null
+
+      - name: List migrations after the push
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          npx supabase migration list --db-url "$SUPABASE_DB_URL" --output-format json > "$RUNNER_TEMP/after.json"
+
+      - name: Summarise the run
+        run: |
+          set -o pipefail
+          node scripts/migration-report.mjs "$RUNNER_TEMP/before.json" "$RUNNER_TEMP/after.json" |
+            tee -a "$GITHUB_STEP_SUMMARY"
