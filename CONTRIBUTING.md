@@ -61,6 +61,23 @@ markdown-only pull request. Its filename becomes the slug and has to match the
 the columns a logged session records for it (`makes` and `attempts` together, `sets`,
 `reps`, `weight_kg`) — so a drill cannot promise a number the tables cannot store.
 
+## Data access
+
+`src/utils/db.ts` is the only module that builds a database client, and the
+stores beside it (`sessions.ts`, `tracker-cache.ts`, `upstream-budget.ts`) are the
+only modules that query one. A page never imports `@supabase/supabase-js` — the
+`no-restricted-imports` rule in `eslint.config.js` fails the build if one does —
+so a route stays thin and the shape it renders is decided in one place.
+
+Nothing in there throws. A missing credential, an unreachable database and a
+refused statement all come back as a `Result`, because a container with no
+credentials still has to serve pages (#94).
+
+The tests fake the client (`src/utils/testing/fake-supabase.ts`) rather than
+reaching a network, so `npm run test:unit` passes offline: the suite runs with
+all network access denied and still passes, which is also why CI can run it with
+no credentials at all.
+
 ## Database migrations
 
 The schema lives in `supabase/migrations/` and is applied in filename order.
