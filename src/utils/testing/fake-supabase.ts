@@ -13,11 +13,11 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-export type FakeOperation = 'select' | 'insert' | 'update' | 'delete';
+export type FakeOperation = 'select' | 'insert' | 'update' | 'delete' | 'upsert';
 
 export interface FakeFilter {
 	column: string;
-	operator: 'eq' | 'gte' | 'lte';
+	operator: 'eq' | 'gte' | 'lte' | 'in';
 	value: unknown;
 }
 
@@ -26,6 +26,8 @@ export interface FakeCall {
 	operation: FakeOperation;
 	payload?: unknown;
 	columns?: string;
+	/** The conflict target an upsert was called with, so a test can assert it. */
+	onConflict?: string;
 	filters: FakeFilter[];
 	order: Array<{ column: string; ascending?: boolean }>;
 	limit?: number;
@@ -43,11 +45,12 @@ export interface FakeResponse {
 
 export type FakeResponder = FakeResponse | ((call: FakeCall) => FakeResponse);
 
+/** A handler for every call, or a queue of responses consumed one per call. */
+export type FakePlanEntry = FakeResponder | FakeResponse[];
+
 export interface FakePlan {
-	/** Responses per table and operation; an array is a queue, consumed in order. */
-	tables?: Record<string, Partial<Record<FakeOperation, FakeResponder | FakeResponder[]>>>;
-	/** Responses per RPC name, with the same queue rules. */
-	rpc?: Record<string, FakeResponder | FakeResponder[]>;
+	tables?: Record<string, Partial<Record<FakeOperation, FakePlanEntry>>>;
+	rpc?: Record<string, FakePlanEntry>;
 }
 
 export class FakeSupabase {
@@ -55,7 +58,7 @@ export class FakeSupabase {
 	readonly calls: FakeCall[] = [];
 	readonly rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
 
-	private readonly queues = new Map<string, FakeResponder[]>();
+	private readonly queues = new Map<string, FakeResponse[]>();
 
 	constructor(private readonly plan: FakePlan = {}) {}
 
@@ -89,25 +92,29 @@ export class FakeSupabase {
 		return this.calls.filter((call) => call.table === table && call.operation === operation);
 	}
 
-	planFor(table: string, operation: FakeOperation): FakeResponder | FakeResponder[] | undefined {
+	planFor(table: string, operation: FakeOperation): FakePlanEntry | undefined {
 		return this.plan.tables?.[table]?.[operation];
 	}
 
-	/** Called by the builder when a query resolves. */
-	answer(key: string, call: FakeCall, responder: FakeResponder | FakeResponder[] | undefined): FakeResponse {
+	/**
+	 * Called by the builder when a query resolves. Three kinds of plan entry:
+	 *
+	 *  - a **function** answers every matching call, which is how a stateful
+	 *    responder (the budget ledger) is written;
+	 *  - an **array** is a queue, consumed one entry per call, which is how a test
+	 *    scripts "the cache is empty, then it holds this row";
+	 *  - an **object** answers every call with the same response.
+	 */
+	answer(key: string, call: FakeCall, responder: FakePlanEntry | undefined): FakeResponse {
 		this.calls.push(call);
-		const queue = this.queueFor(key, responder);
-		const next = queue.shift();
-		if (next === undefined) return { data: [], error: null };
-		return typeof next === 'function' ? next(call) : next;
-	}
+		if (typeof responder === 'function') return responder(call);
+		if (responder === undefined) return { data: [], error: null };
+		if (!Array.isArray(responder)) return responder;
 
-	private queueFor(key: string, responder: FakeResponder | FakeResponder[] | undefined): FakeResponder[] {
-		const existing = this.queues.get(key);
-		if (existing !== undefined) return existing;
-		const queued = responder === undefined ? [] : Array.isArray(responder) ? [...responder] : [responder];
-		this.queues.set(key, queued);
-		return queued;
+		const queue = this.queues.get(key) ?? [...responder];
+		this.queues.set(key, queue);
+		const next = queue.shift();
+		return next === undefined ? { data: [], error: null } : next;
 	}
 }
 
@@ -142,6 +149,17 @@ class FakeBuilder implements PromiseLike<FakeResponse> {
 	delete(): this {
 		this.call.operation = 'delete';
 		return this;
+	}
+
+	upsert(payload: unknown, options?: { onConflict?: string }): this {
+		this.call.operation = 'upsert';
+		this.call.payload = payload;
+		this.call.onConflict = options?.onConflict;
+		return this;
+	}
+
+	in(column: string, values: unknown[]): this {
+		return this.filter('in', column, values);
 	}
 
 	eq(column: string, value: unknown): this {
