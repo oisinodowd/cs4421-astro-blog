@@ -1,0 +1,163 @@
+---
+import { getCollection } from 'astro:content';
+import BaseHead from '../../components/BaseHead.astro';
+import Footer from '../../components/Footer.astro';
+import Header from '../../components/Header.astro';
+import { SITE_TITLE } from '../../consts';
+import { DRILL_CATEGORIES, DRILL_DIFFICULTIES } from '../../content-schema';
+export const prerender = true;
+
+// Sorted here rather than in the schema: the catalogue is small, and a stable
+// order (category, then easiest first) is presentation, not content.
+const drills = (await getCollection('drills')).sort(
+	(a, b) =>
+		DRILL_CATEGORIES.indexOf(a.data.category) - DRILL_CATEGORIES.indexOf(b.data.category) ||
+		DRILL_DIFFICULTIES.indexOf(a.data.difficulty) -
+			DRILL_DIFFICULTIES.indexOf(b.data.difficulty) ||
+		a.data.name.localeCompare(b.data.name),
+);
+
+const byCategory = DRILL_CATEGORIES.map((category) => ({
+	category,
+	drills: drills.filter((drill) => drill.data.category === category),
+})).filter((group) => group.drills.length > 0);
+
+const title = `Drills — ${SITE_TITLE}`;
+const description = 'The training catalogue: what each drill is, what it needs, and how progress in it is measured.';
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<BaseHead title={title} description={description} />
+		<style>
+			main {
+				width: 960px;
+				max-width: calc(100% - 2em);
+				margin: auto;
+				padding: 1em;
+			}
+			.intro {
+				margin: 2em 0 3em;
+			}
+			.intro h1 {
+				margin: 0 0 0.5em;
+			}
+			.intro p {
+				max-width: 44rem;
+				color: rgb(var(--gray-dark));
+				line-height: 1.7;
+			}
+			.category {
+				margin-bottom: 3em;
+			}
+			.category h2 {
+				margin: 0 0 1em;
+				padding-bottom: 0.5em;
+				border-bottom: 2px solid rgb(var(--gray-light));
+				text-transform: capitalize;
+			}
+			ul {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 1rem;
+				list-style-type: none;
+				margin: 0;
+				padding: 0;
+			}
+			li {
+				width: calc(50% - 0.5rem);
+			}
+			li article {
+				height: 100%;
+				box-sizing: border-box;
+				padding: 1.25rem;
+				border: 1px solid rgba(var(--gray-light), 0.8);
+				border-radius: 18px;
+				background: rgba(255, 255, 255, 0.7);
+			}
+			li a {
+				text-decoration: none;
+				color: rgb(var(--black));
+			}
+			li a:hover h3 {
+				color: rgb(var(--accent));
+			}
+			li h3 {
+				margin: 0 0 0.5rem;
+				font-size: 1.1rem;
+			}
+			li p {
+				margin: 0 0 0.75rem;
+				color: rgb(var(--gray-dark));
+				line-height: 1.6;
+			}
+			.meta {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 0.5rem;
+				margin: 0;
+				font-size: 0.8rem;
+				color: rgb(var(--gray));
+			}
+			.meta span {
+				padding: 0.15rem 0.6rem;
+				border: 1px solid rgb(var(--gray-light));
+				border-radius: 999px;
+			}
+			.equipment {
+				margin: 0;
+				font-size: 0.85rem;
+				color: rgb(var(--gray));
+			}
+			@media (max-width: 720px) {
+				li {
+					width: 100%;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<Header />
+		<main>
+			<section class="intro">
+				<h1>Drills</h1>
+				<p>
+					{drills.length} drills, grouped by what they train. Each one records a specific set of
+					numbers — makes and attempts, sets and reps, or weight — so a session log is comparable
+					week to week instead of a note that only made sense on the day.
+				</p>
+			</section>
+
+			{
+				byCategory.map(({ category, drills: entries }) => (
+					<section class="category">
+						<h2>{category.replace('-', ' ')}</h2>
+						<ul>
+							{entries.map((drill) => (
+								<li>
+									<article>
+										<a href={`/drills/${drill.id}/`}>
+											<h3>{drill.data.name}</h3>
+										</a>
+										<p>{drill.data.description}</p>
+										<p class="meta">
+											<span>{drill.data.difficulty}</span>
+											<span>
+												measures {drill.data.measures.join(', ').replace('weight_kg', 'weight (kg)')}
+											</span>
+										</p>
+										{drill.data.equipment.length > 0 && (
+											<p class="equipment">Needs: {drill.data.equipment.join(', ')}</p>
+										)}
+									</article>
+								</li>
+							))}
+						</ul>
+					</section>
+				))
+			}
+		</main>
+		<Footer />
+	</body>
+</html>

@@ -6,7 +6,7 @@
  * serve is incomplete or internally broken:
  *
  *   1. required artifacts exist (index.html, the blog index and every blog
- *      post, rss.xml, sitemap-index.xml);
+ *      post, the drill index and every drill, rss.xml, sitemap-index.xml);
  *   2. every internal link in every generated page resolves to a real file in
  *      dist/client.
  *
@@ -19,6 +19,7 @@ import path from 'node:path';
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CLIENT = path.join(ROOT, 'dist', 'client');
 const CONTENT_BLOG = path.join(ROOT, 'src', 'content', 'blog');
+const CONTENT_DRILLS = path.join(ROOT, 'src', 'content', 'drills');
 
 const failures = [];
 const fail = (message) => failures.push(message);
@@ -131,7 +132,13 @@ if (!existsSync(CLIENT)) {
 	process.exit(1);
 }
 
-const requiredFiles = ['index.html', 'blog/index.html', 'rss.xml', 'sitemap-index.xml'];
+const requiredFiles = [
+	'index.html',
+	'blog/index.html',
+	'drills/index.html',
+	'rss.xml',
+	'sitemap-index.xml',
+];
 for (const file of requiredFiles) {
 	if (!existsSync(path.join(CLIENT, file))) fail(`missing artifact: dist/client/${file}`);
 }
@@ -150,6 +157,24 @@ for (const post of posts) {
 	const slug = post.replace(/\.(md|mdx)$/, '');
 	if (!existsSync(path.join(CLIENT, 'blog', slug, 'index.html'))) {
 		fail(`missing page for content/blog/${post}: expected dist/client/blog/${slug}/index.html`);
+	}
+}
+
+// The drill catalogue (#102) is content too, so it gets the same contract: a
+// markdown file in the repository has to have a page in the output, or the
+// catalogue is describing pages that do not exist.
+const drills = existsSync(CONTENT_DRILLS)
+	? readdirSync(CONTENT_DRILLS).filter((file) => file.endsWith('.md'))
+	: [];
+
+if (drills.length === 0) {
+	fail(`no drills found in ${path.relative(ROOT, CONTENT_DRILLS)}`);
+}
+
+for (const drill of drills) {
+	const slug = drill.replace(/\.md$/, '');
+	if (!existsSync(path.join(CLIENT, 'drills', slug, 'index.html'))) {
+		fail(`missing page for content/drills/${drill}: expected dist/client/drills/${slug}/index.html`);
 	}
 }
 
@@ -184,5 +209,5 @@ if (failures.length > 0) {
 }
 
 console.log(
-	`Build output OK — ${pages.length} page(s) in ${label}, ${posts.length} blog post(s), ${checked} internal link(s) resolved.`,
+	`Build output OK — ${pages.length} page(s) in ${label}, ${posts.length} blog post(s), ${drills.length} drill(s), ${checked} internal link(s) resolved.`,
 );
