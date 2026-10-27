@@ -1,0 +1,6 @@
+-- Intentionally empty.
+--
+-- Nothing here is seeded: the tracker cache is filled by the ingest (#97), and
+-- trainer sessions are entered by hand. This file exists so a reset has a seed
+-- step to run rather than warning about a missing one, and so the next person
+-- looking for the reason finds it here.
