@@ -35,6 +35,26 @@ export default [
     },
   },
 
+  // #95: a route reads and writes through the data modules, never through the
+  // client. Importing the client into a page is how query building spreads into
+  // templates, which is the thing those modules exist to prevent.
+  {
+    files: ["src/pages/**/*.{ts,tsx,astro}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@supabase/supabase-js"],
+              message: "Use the data modules (src/utils/db.ts and the stores beside it) instead of the client.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+
   // Node CLI scripts in scripts/ report their results on stdout/stderr by design.
   {
     files: ["scripts/**/*.{js,mjs,cjs}"],

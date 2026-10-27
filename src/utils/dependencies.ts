@@ -53,6 +53,7 @@ export interface BalldontlieConfig {
 }
 
 type Env = Record<string, string | undefined>;
+export type { Env };
 type DependencyName = 'supabase' | 'balldontlie';
 type ProbeOutcome = Pick<DependencyReport, 'reachable' | 'detail'>;
 

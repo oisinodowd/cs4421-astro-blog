@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
 import { DRILL_MEASURES, authorsSchema, blogSchema, drillSchema } from './content-schema';
+import { DRILL_SLUG_PATTERN } from './utils/sessions';
 
 const BLOG_DIR = fileURLToPath(new URL('./content/blog/', import.meta.url));
 const AUTHORS_DIR = fileURLToPath(new URL('./content/authors/', import.meta.url));
@@ -97,14 +98,15 @@ describe('real drill entries match the drill schema', () => {
 });
 
 describe('the drill catalogue agrees with the trainer tables', () => {
-	// The migration checks drill_slug against this pattern, so a catalogue file
-	// whose name does not match it could never be logged against.
-	const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-
+	// Both sides read the same pattern: the data module checks it when a session
+	// is logged, and this asserts the catalogue's filenames satisfy it, so a drill
+	// in the repository can always be logged against.
 	it('gives every drill a slug the session_drills check accepts', () => {
 		for (const file of drillFiles) {
 			const slug = file.replace(/\.md$/, '');
-			expect(SLUG.test(slug), `drills/${file} -> "${slug}" fails the drill_slug check`).toBe(true);
+			expect(DRILL_SLUG_PATTERN.test(slug), `drills/${file} -> "${slug}" fails the drill_slug check`).toBe(
+				true,
+			);
 		}
 	});
 
