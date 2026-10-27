@@ -1,0 +1,123 @@
+---
+import { getCollection, render, type CollectionEntry } from 'astro:content';
+import BaseHead from '../../components/BaseHead.astro';
+import Footer from '../../components/Footer.astro';
+import Header from '../../components/Header.astro';
+import { SITE_TITLE } from '../../consts';
+import type { DrillMeasure } from '../../content-schema';
+export const prerender = true;
+
+export async function getStaticPaths() {
+	const drills = await getCollection('drills');
+	return drills.map((drill) => ({ params: { slug: drill.id }, props: drill }));
+}
+
+type Props = CollectionEntry<'drills'>;
+
+const drill = Astro.props;
+const { Content } = await render(drill);
+
+// The column names are the storage vocabulary; the labels are the trainer's.
+const MEASURE_LABELS: Record<DrillMeasure, string> = {
+	makes: 'makes',
+	attempts: 'attempts',
+	sets: 'sets',
+	reps: 'reps',
+	weight_kg: 'weight (kg)',
+};
+
+const title = `${drill.data.name} — ${SITE_TITLE}`;
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<BaseHead title={title} description={drill.data.description} />
+		<style>
+			main {
+				width: 720px;
+				max-width: calc(100% - 2em);
+				margin: auto;
+				padding: 1em 1em 3em;
+			}
+			.breadcrumb {
+				margin: 2em 0 1em;
+				font-size: 0.85rem;
+			}
+			.breadcrumb a {
+				color: rgb(var(--gray));
+			}
+			h1 {
+				margin: 0 0 0.75em;
+				line-height: 1.1;
+			}
+			.lede {
+				color: rgb(var(--gray-dark));
+				line-height: 1.7;
+			}
+			.facts {
+				display: grid;
+				grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+				gap: 1rem;
+				margin: 2em 0;
+				padding: 1.25rem;
+				border: 1px solid rgba(var(--gray-light), 0.8);
+				border-radius: 18px;
+				background: rgba(255, 255, 255, 0.7);
+			}
+			.facts h2 {
+				margin: 0 0 0.35rem;
+				font-size: 0.75rem;
+				letter-spacing: 0.1em;
+				text-transform: uppercase;
+				color: rgb(var(--gray));
+			}
+			.facts p {
+				margin: 0;
+				line-height: 1.5;
+			}
+			.prose {
+				color: rgb(var(--gray-dark));
+			}
+			.prose :global(h2) {
+				margin-top: 2em;
+			}
+		</style>
+	</head>
+	<body>
+		<Header />
+		<main>
+			<p class="breadcrumb"><a href="/drills/">← All drills</a></p>
+			<h1>{drill.data.name}</h1>
+			<p class="lede">{drill.data.description}</p>
+
+			<section class="facts">
+				<div>
+					<h2>Category</h2>
+					<p>{drill.data.category.replace('-', ' ')}</p>
+				</div>
+				<div>
+					<h2>Difficulty</h2>
+					<p>{drill.data.difficulty}</p>
+				</div>
+				<div>
+					<h2>Equipment</h2>
+					<p>{drill.data.equipment.length > 0 ? drill.data.equipment.join(', ') : 'none'}</p>
+				</div>
+				<div>
+					<h2>Logged as</h2>
+					<p>{drill.data.measures.map((measure) => MEASURE_LABELS[measure]).join(', ')}</p>
+				</div>
+				<div>
+					<h2>How progress is measured</h2>
+					<p>{drill.data.progress}</p>
+				</div>
+			</section>
+
+			<article class="prose">
+				<Content />
+			</article>
+		</main>
+		<Footer />
+	</body>
+</html>

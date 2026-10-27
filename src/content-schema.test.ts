@@ -5,10 +5,12 @@ import { z } from 'astro/zod';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
-import { authorsSchema, blogSchema } from './content-schema';
+import { DRILL_MEASURES, authorsSchema, blogSchema, drillSchema } from './content-schema';
 
 const BLOG_DIR = fileURLToPath(new URL('./content/blog/', import.meta.url));
 const AUTHORS_DIR = fileURLToPath(new URL('./content/authors/', import.meta.url));
+const DRILLS_DIR = fileURLToPath(new URL('./content/drills/', import.meta.url));
+const MIGRATIONS_DIR = fileURLToPath(new URL('../supabase/migrations/', import.meta.url));
 
 // Astro injects its image() helper as the heroImage validator (resolved at
 // build time). In unit tests heroImage is a plain path string; every other
@@ -36,6 +38,27 @@ function readFrontmatter(dir: string, file: string): unknown {
 
 const blogFiles = listFiles(BLOG_DIR, /\.(md|mdx)$/);
 const authorFiles = listFiles(AUTHORS_DIR, /\.md$/);
+const drillFiles = listFiles(DRILLS_DIR, /\.md$/);
+
+/**
+ * The `create table public.session_drills (...)` block, read out of the
+ * migrations. A drill promises numbers the trainer tables have to be able to
+ * store, and the only way to know that without a database is to read the DDL.
+ */
+function sessionDrillsTable(): string {
+	const migration = readdirSync(MIGRATIONS_DIR).find((file) =>
+		/create_trainer_tables\.sql$/.test(file),
+	);
+	if (!migration) throw new Error('no create_trainer_tables migration found');
+
+	const sql = readFileSync(MIGRATIONS_DIR + migration, 'utf8');
+	const start = sql.indexOf('create table public.session_drills');
+	const end = sql.indexOf('\n);', start);
+	if (start === -1 || end === -1) {
+		throw new Error('could not find the session_drills table in the migration');
+	}
+	return sql.slice(start, end);
+}
 
 describe('real blog entries match the content schema', () => {
 	it('has blog entries to validate', () => {
@@ -59,6 +82,38 @@ describe('real author entries match the content schema', () => {
 			authorsSchema.parse(readFrontmatter(AUTHORS_DIR, file));
 		});
 	}
+});
+
+describe('real drill entries match the drill schema', () => {
+	it('has drills to validate', () => {
+		expect(drillFiles.length).toBeGreaterThan(0);
+	});
+
+	for (const file of drillFiles) {
+		it(`accepts drills/${file}`, () => {
+			drillSchema.parse(readFrontmatter(DRILLS_DIR, file));
+		});
+	}
+});
+
+describe('the drill catalogue agrees with the trainer tables', () => {
+	// The migration checks drill_slug against this pattern, so a catalogue file
+	// whose name does not match it could never be logged against.
+	const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+	it('gives every drill a slug the session_drills check accepts', () => {
+		for (const file of drillFiles) {
+			const slug = file.replace(/\.md$/, '');
+			expect(SLUG.test(slug), `drills/${file} -> "${slug}" fails the drill_slug check`).toBe(true);
+		}
+	});
+
+	it('only names numbers that session_drills has a column for', () => {
+		const table = sessionDrillsTable();
+		for (const measure of DRILL_MEASURES) {
+			expect(table, `session_drills has no ${measure} column`).toContain(measure);
+		}
+	});
 });
 
 describe('content integrity', () => {
@@ -145,6 +200,80 @@ describe('malformed frontmatter is rejected', () => {
 				socialLinks: { github: 'not-a-url' },
 			}),
 		).toThrow();
+	});
+});
+
+describe('malformed drill frontmatter is rejected', () => {
+	// The shape every catalogue entry uses, so each case below changes one field
+	// and nothing else.
+	const valid = {
+		name: 'Test Drill',
+		category: 'shooting',
+		difficulty: 'beginner',
+		equipment: ['ball'],
+		description: 'd',
+		measures: ['makes', 'attempts'],
+		progress: 'makes out of attempts',
+	};
+
+	it('accepts the shape the catalogue uses', () => {
+		expect(() => drillSchema.parse(valid)).not.toThrow();
+	});
+
+	it('rejects a category outside the catalogue', () => {
+		expect(() => drillSchema.parse({ ...valid, category: 'goaltending' })).toThrow();
+	});
+
+	it('rejects an unknown difficulty', () => {
+		expect(() => drillSchema.parse({ ...valid, difficulty: 'expert' })).toThrow();
+	});
+
+	it('rejects a drill with nothing to measure', () => {
+		expect(() => drillSchema.parse({ ...valid, measures: [] })).toThrow();
+	});
+
+	it('rejects a measure the sessions table cannot store', () => {
+		expect(() => drillSchema.parse({ ...valid, measures: ['three_pointers'] })).toThrow();
+	});
+
+	it('rejects makes without attempts', () => {
+		expect(() => drillSchema.parse({ ...valid, measures: ['makes'] })).toThrow(/attempts/);
+	});
+
+	it('rejects a drill with no description', () => {
+		expect(() =>
+			drillSchema.parse({
+				name: 'Test Drill',
+				category: 'shooting',
+				difficulty: 'beginner',
+				measures: ['makes', 'attempts'],
+				progress: 'makes out of attempts',
+			}),
+		).toThrow();
+	});
+
+	it('rejects a drill with no progress measure', () => {
+		expect(() =>
+			drillSchema.parse({
+				name: 'Test Drill',
+				category: 'shooting',
+				difficulty: 'beginner',
+				description: 'd',
+				measures: ['makes', 'attempts'],
+			}),
+		).toThrow();
+	});
+
+	it('accepts a drill that needs no equipment', () => {
+		const parsed = drillSchema.parse({
+			name: 'Test Drill',
+			category: 'conditioning',
+			difficulty: 'beginner',
+			description: 'd',
+			measures: ['sets', 'reps'],
+			progress: 'sets and reps',
+		});
+		expect(parsed.equipment).toEqual([]);
 	});
 });
 

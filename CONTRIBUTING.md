@@ -48,6 +48,19 @@ Three workflows touch production, and they are not interchangeable:
   not deploying for this stack; a change can be reviewed, released and still not
   be in the environment it describes.
 
+## Content
+
+Posts, authors and drills are content collections under `src/content/`, validated by
+the schemas in `src/content-schema.ts` both at build time and by
+`src/content-schema.test.ts`. Bad frontmatter therefore fails `npm run check` or the
+unit tests, rather than rendering an empty page.
+
+A drill is one markdown file in `src/content/drills/`: adding to the catalogue is a
+markdown-only pull request. Its filename becomes the slug and has to match the
+`session_drills.drill_slug` pattern in the migrations, and its `measures` list names
+the columns a logged session records for it (`makes` and `attempts` together, `sets`,
+`reps`, `weight_kg`) — so a drill cannot promise a number the tables cannot store.
+
 ## Database migrations
 
 The schema lives in `supabase/migrations/` and is applied in filename order.

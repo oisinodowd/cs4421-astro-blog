@@ -1,7 +1,7 @@
 import { defineCollection } from 'astro:content';
 import { glob } from 'astro/loaders';
 
-import { authorsSchema, blogSchema } from './content-schema';
+import { authorsSchema, blogSchema, drillSchema } from './content-schema';
 
 const blog = defineCollection({
 	// Load Markdown and MDX files in the `src/content/blog/` directory.
@@ -15,4 +15,11 @@ const authors = defineCollection({
 	schema: authorsSchema,
 });
 
-export const collections = { blog, authors };
+// Drills live in the repository rather than a table (#102), so the catalogue is
+// reviewed and versioned like the posts beside it.
+const drills = defineCollection({
+	loader: glob({ base: './src/content/drills', pattern: '**/*.md' }),
+	schema: drillSchema,
+});
+
+export const collections = { blog, authors, drills };
