@@ -32,6 +32,22 @@
   not deploy the static site. If such a change is expected to alter what is served,
   dispatch the `Deploy Static Site via AWS CDK` workflow by hand.
 
+## Infrastructure deploys
+
+Three workflows touch production, and they are not interchangeable:
+
+- `deploy-static.yml` deploys `StaticSiteStack` (S3 + CloudFront) on a push that
+  can change what is served, and by hand after a dependency-only change.
+- `deploy-infra.yml` deploys `EcsServiceStack`, behind the `production`
+  environment, and runs the post-deploy smoke test afterwards. It skips
+  dependency-only pushes, so **dispatch it by hand after a CDK library bump** —
+  a new `aws-cdk-lib` can change the synthesised template.
+- `deploy-container.yml` only re-pulls the published image against the task
+  definition. It does not apply stack changes, so anything that alters the task
+  definition, the service or its parameters needs `deploy-infra.yml`. Merging is
+  not deploying for this stack; a change can be reviewed, released and still not
+  be in the environment it describes.
+
 ## Releases (container image)
 
 - Semver tags: v1.0.0, v1.1.0, ...

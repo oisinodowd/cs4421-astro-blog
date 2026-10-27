@@ -1,0 +1,91 @@
+name: Deploy ECS Stack via AWS CDK
+
+# Production deploy of EcsServiceStack (#111).
+#
+# Until this existed the stack had no deploy path: deploy-static.yml only ever
+# names StaticSiteStack, and deploy-container.yml re-pulls the image against the
+# task definition the last manual deploy left behind. #94 is what made that
+# visible -- its credentials arrive through the task definition, so the commit
+# was merged and released while the stack change stayed in the repository, and
+# production reported both dependencies unconfigured.
+#
+# The `production` environment is the same gate the container rollout and the
+# migrations use: the job parks without holding a runner until a reviewer
+# approves it in the Actions UI, which records who applied which commit.
+#
+# Trade-off, and the reason there is a manual trigger: a dependency-only push
+# does not deploy, because a lockfile bump is not a stack change. A new
+# `aws-cdk-lib` can in principle change the synthesised template, so that case is
+# dispatched deliberately rather than deployed on every Dependabot merge.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cdk/**'
+      - '!cdk/package.json'
+      - '!cdk/package-lock.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    environment:
+      name: production
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js Runtime
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: 'npm'
+          # Cache both dependency trees, the way the `infra` gate does.
+          cache-dependency-path: |
+            package-lock.json
+            cdk/package-lock.json
+
+      - name: Install Project Dependencies
+        run: npm ci
+
+      # Deploying EcsServiceStack still synthesises the whole app, and
+      # StaticSiteStack takes dist/client as its deployment asset -- so the site
+      # has to be built even though this stack does not serve it.
+      - name: Build Static Site
+        run: npm run build
+
+      - name: Install CDK Dependencies
+        working-directory: cdk
+        run: npm ci
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      # Only EcsServiceStack is named. StaticSiteStack has its own workflow and is
+      # left alone here, so a stack change does not quietly redeploy the CDN.
+      - name: Deploy the ECS stack
+        working-directory: cdk
+        run: npx cdk deploy EcsServiceStack --require-approval never
+
+      # Regression gate on the live service, for the same reason the container
+      # deploy has one: the circuit breaker rolls a failed rollout back without
+      # telling anyone outside the service events, so a stack change that leaves
+      # nothing serving should fail the run rather than wait to be noticed.
+      - name: Post-deploy smoke test
+        run: |
+          set -euo pipefail
+          APP_URL=$(aws cloudformation describe-stacks --stack-name EcsServiceStack \
+            --query "Stacks[0].Outputs[?OutputKey=='AppUrl'].OutputValue" --output text)
+          if [ -z "$APP_URL" ] || [ "$APP_URL" = "None" ]; then
+            echo "FAIL: EcsServiceStack has no AppUrl output" >&2
+            exit 1
+          fi
+          echo "Target: $APP_URL"
+          bash scripts/smoke-deploy.sh "$APP_URL"
