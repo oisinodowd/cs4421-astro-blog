@@ -2,8 +2,8 @@ name: Apply Database Migrations
 
 # Schema changes are not applied from a laptop (#96). The migrations live in the
 # repository, so their delivery goes through the same manual gate the container
-# deploy uses: this job parks on the `production` environment until a reviewer
-# approves it, which records who applied which commit to the database.
+# deploy uses: the `migrate` job parks on the `production` environment until a
+# reviewer approves it, which records who applied which commit to the database.
 #
 # The CLI is the one pinned in package-lock.json, the same binary and version a
 # developer runs for `supabase db reset`, so what a migration does locally is
@@ -15,7 +15,44 @@ permissions:
   contents: read
 
 jobs:
+  # Deliberately outside the `production` environment, and therefore outside the
+  # approval: the whole job waits for approval when it carries the environment,
+  # so a check inside it cannot fail early. Everything here is a configuration
+  # mistake a reviewer is in no position to decide -- a missing secret, a
+  # placeholder password, a pooler that cannot run migrations, a host with no
+  # IPv4 route -- and each one is better reported in seconds than discovered
+  # halfway through an approved run.
+  verify-connection:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js Runtime
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # Costs nothing and needs no install: it reads the string and, for the
+      # direct connection host, its DNS.
+      - name: Check the connection string can work
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: node scripts/check-db-url.mjs
+
+      - name: Install Project Dependencies
+        run: npm ci
+
+      # The string looking right is not the same as the credentials working, and
+      # only the database can settle that. `migration list` is read-only, so the
+      # answer arrives before anyone has to approve an approval-gated write.
+      - name: Prove the credentials and the connection
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: npx supabase migration list --db-url "$SUPABASE_DB_URL" --output-format json > /dev/null
+
   migrate:
+    needs: verify-connection
     environment:
       name: production
     runs-on: ubuntu-latest
@@ -31,31 +68,6 @@ jobs:
 
       - name: Install Project Dependencies
         run: npm ci
-
-      # Fails here, before the gate is approved, rather than after: a missing
-      # secret is a configuration problem, not something a reviewer can decide.
-      - name: Check the connection is configured
-        env:
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-        run: |
-          set -euo pipefail
-          if [ -z "${SUPABASE_DB_URL:-}" ]; then
-            echo "FAIL: repository secret SUPABASE_DB_URL is not set" >&2
-            echo "Settings -> Secrets and variables -> Actions -> New repository secret" >&2
-            exit 1
-          fi
-
-          # The port is the only part of the connection string reported, and it
-          # is reported because it is the part that decides whether any of this
-          # can work: a transaction pooler cannot run migrations, which need a
-          # session connection.
-          port=$(printf '%s' "$SUPABASE_DB_URL" | sed -E 's#^.*@[^/:]+:([0-9]+)/.*$#\1#')
-          if [ "$port" = "6543" ]; then
-            echo "FAIL: SUPABASE_DB_URL points at the transaction pooler (port 6543)." >&2
-            echo "Use the session pooler on port 5432 (Supabase dashboard -> Connect)." >&2
-            exit 1
-          fi
-          echo "Connection configured (port ${port:-default})"
 
       - name: Show the Supabase CLI version
         run: npx supabase --version
