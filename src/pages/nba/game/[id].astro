@@ -1,0 +1,389 @@
+---
+import BaseHead from '../../../components/BaseHead.astro';
+import Footer from '../../../components/Footer.astro';
+import Header from '../../../components/Header.astro';
+import { SITE_TITLE } from '../../../consts';
+import { calendarDateIn, formatCalendarDate } from '../../../utils/date';
+import { refreshSlate } from '../../../utils/slate-ingest';
+import {
+	describeStatus,
+	formatAge,
+	isStale,
+	matchup,
+	quarterLines,
+	shotLine,
+	splitBoxScore,
+	teamLabel,
+	TRACKER_TIME_ZONE,
+} from '../../../utils/slate-view';
+import { getGameBoxScore } from '../../../utils/tracker-cache';
+
+// The score, the status and the box score all move; none of it can be baked.
+export const prerender = false;
+
+const idText = Astro.params.id ?? '';
+const gameId = /^[0-9]{1,9}$/.test(idText) ? Number(idText) : null;
+
+const now = Date.now();
+let lookup = gameId === null ? null : await getGameBoxScore(gameId);
+
+// A game page can be the first page of the day someone opens. In that case the
+// cache may not have today's slate yet, so ask for it once -- TTL-bound, so it
+// is usually free -- and read again. An id that is still missing is a 404.
+if (lookup !== null && !lookup.ok && lookup.error.code === 'not-found') {
+	const refresh = await refreshSlate(calendarDateIn(TRACKER_TIME_ZONE, now));
+	// Re-read whenever the refresh can vouch for games, not only when it spent
+	// something: a container that asked a minute ago and got a `fresh` answer has
+	// already written the rows this page is looking for.
+	if (refresh.ok && refresh.value.games > 0) {
+		lookup = await getGameBoxScore(gameId as number);
+	}
+}
+
+const missing = lookup === null || (!lookup.ok && lookup.error.code === 'not-found');
+if (missing) {
+	Astro.response.status = 404;
+}
+
+// A database that is down or unconfigured is not a 404: the page says so, the
+// same way the slate page and /api/health do (#94).
+const unavailable = lookup !== null && !lookup.ok && !missing;
+
+const game = lookup?.ok ? lookup.value.game : null;
+const status = game === null ? null : describeStatus(game);
+const lines = game === null ? [] : quarterLines(game);
+const boxScore = lookup?.ok ? splitBoxScore(lookup.value.players) : null;
+
+const ageMs = game === null ? null : now - Date.parse(game.ingestedAt);
+const stale = status !== null && isStale(ageMs, status.live);
+
+const title =
+	game === null ? `Game not found — ${SITE_TITLE}` : `${matchup(game)} — ${SITE_TITLE}`;
+const description =
+	game === null
+		? 'No cached NBA game matches that id.'
+		: `${matchup(game)}: the score, the quarter lines and the box score as the site last cached them.`;
+
+const stat = (value: number | null) => value ?? '—';
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<BaseHead title={title} description={description} />
+		<style>
+			.page-shell {
+				width: 960px;
+				max-width: calc(100% - 2em);
+				margin: auto;
+				padding: 1em 1em 3em;
+			}
+			.breadcrumb {
+				margin: 2em 0 1.5em;
+				font-size: 0.85rem;
+			}
+			.breadcrumb a {
+				color: rgb(var(--gray));
+			}
+			.matchup {
+				margin: 0 0 0.5em;
+				line-height: 1.1;
+			}
+			.scoreline {
+				display: flex;
+				flex-wrap: wrap;
+				align-items: baseline;
+				gap: 0.5rem 1rem;
+				margin: 0 0 2em;
+				color: rgb(var(--gray));
+				font-size: 0.9rem;
+			}
+			.status {
+				padding: 0.15rem 0.6rem;
+				border: 1px solid rgb(var(--gray-light));
+				border-radius: 999px;
+				font-size: 0.8rem;
+				white-space: nowrap;
+			}
+			.status.live {
+				border-color: rgb(var(--accent));
+				color: rgb(var(--accent));
+				font-weight: 600;
+			}
+			.warning {
+				margin: 0 0 2em;
+				padding: 0.75rem 1rem;
+				border-left: 4px solid rgb(var(--accent));
+				background: rgba(255, 255, 255, 0.7);
+				font-size: 0.9rem;
+				line-height: 1.6;
+				color: rgb(var(--gray-dark));
+			}
+			section {
+				margin-bottom: 2.5em;
+			}
+			section h2 {
+				margin: 0 0 0.75em;
+				font-size: 1.05rem;
+			}
+			table {
+				width: 100%;
+				border-collapse: collapse;
+				font-variant-numeric: tabular-nums;
+			}
+			th,
+			td {
+				padding: 0.4rem 0.5rem;
+				text-align: right;
+				font-size: 0.9rem;
+			}
+			th:first-child,
+			td:first-child {
+				text-align: left;
+			}
+			thead th {
+				font-size: 0.72rem;
+				letter-spacing: 0.08em;
+				text-transform: uppercase;
+				color: rgb(var(--gray));
+				font-weight: 500;
+			}
+			tbody th {
+				font-weight: 600;
+			}
+			tbody tr + tr th,
+			tbody tr + tr td {
+				border-top: 1px solid rgba(var(--gray-light), 0.6);
+			}
+			.total {
+				font-weight: 700;
+			}
+			.linescore {
+				padding: 1rem 1.25rem;
+				border: 1px solid rgba(var(--gray-light), 0.8);
+				border-radius: 18px;
+				background: rgba(255, 255, 255, 0.7);
+			}
+			details {
+				margin-top: 1.5em;
+				padding: 0.75rem 1rem;
+				border: 1px solid rgba(var(--gray-light), 0.8);
+				border-radius: 12px;
+			}
+			summary {
+				cursor: pointer;
+				font-size: 0.9rem;
+				font-weight: 600;
+			}
+			details table {
+				margin-top: 0.75em;
+			}
+			.unavailable,
+			.missing {
+				padding: 1.5rem;
+				border: 1px solid rgba(var(--gray-light), 0.8);
+				border-radius: 18px;
+				background: rgba(255, 255, 255, 0.7);
+			}
+			.unavailable h2,
+			.missing h1 {
+				margin: 0 0 0.5rem;
+				font-size: 1.1rem;
+			}
+			.unavailable p,
+			.missing p {
+				margin: 0 0 0.75rem;
+				max-width: 44rem;
+				line-height: 1.7;
+				color: rgb(var(--gray-dark));
+			}
+			.unavailable p:last-child,
+			.missing p:last-child {
+				margin-bottom: 0;
+			}
+			@media (max-width: 640px) {
+				th,
+				td {
+					padding: 0.3rem 0.2rem;
+					font-size: 0.8rem;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<Header />
+		<main class="page-shell">
+			{
+				missing && (
+					<section class="missing">
+						<h1>No such game</h1>
+						<p>
+							Nothing in the cache has that id. A game is only here once its day has been
+							ingested, and an id that never appears upstream will never appear here.
+						</p>
+						<p>
+							<a href="/nba">Show today's slate</a>
+						</p>
+					</section>
+				)
+			}
+
+			{unavailable && (
+				<p class="breadcrumb"><a href="/nba">← Today's slate</a></p>
+			)}
+			{unavailable && (
+				<section class="missing">
+					<h1>The game is unavailable</h1>
+					<p>
+						The cache could not be read just now, so there is no score to show. Nothing has been
+						guessed in its place; try again in a moment.
+					</p>
+				</section>
+			)}
+
+			{game !== null && status !== null && boxScore !== null && (
+				<>
+					<p class="breadcrumb">
+						<a href={`/nba?date=${game.gameDate}`}>← Slate for {formatCalendarDate(game.gameDate)}</a>
+					</p>
+
+					<h1 class="matchup">{matchup(game)}</h1>
+					<div class="scoreline">
+						<span class:list={['status', { live: status.live }]}>{status.label}</span>
+						<span>
+							{game.visitorScore ?? '—'}–{game.homeScore ?? '—'}
+						</span>
+						<span>Snapshot updated {ageMs === null ? 'at an unreadable time' : formatAge(ageMs)}</span>
+					</div>
+
+					{stale && (
+						<p class="warning">
+							This snapshot is {ageMs === null ? 'of unknown age' : formatAge(ageMs)}; the score
+							and the state of play may have moved on.
+						</p>
+					)}
+
+					<section>
+						<h2>Line score</h2>
+						<div class="linescore">
+							<table>
+								<thead>
+									<tr>
+										<th scope="col">Team</th>
+										{lines.map((line) => (
+											<th scope="col">{line.label}</th>
+										))}
+									</tr>
+								</thead>
+								<tbody>
+									<tr>
+										<th scope="row" title={game.visitorTeam?.fullName}>
+											{teamLabel(game.visitorTeam)}
+										</th>
+										{lines.map((line) => (
+											<td class={line.label === 'T' ? 'total' : undefined}>
+												{line.visitor ?? '—'}
+											</td>
+										))}
+									</tr>
+									<tr>
+										<th scope="row" title={game.homeTeam?.fullName}>
+											{teamLabel(game.homeTeam)}
+										</th>
+										{lines.map((line) => (
+											<td class={line.label === 'T' ? 'total' : undefined}>{line.home ?? '—'}</td>
+										))}
+									</tr>
+								</tbody>
+							</table>
+						</div>
+					</section>
+
+					{boxScore.total === 0 ? (
+						<section class="unavailable">
+							<h2>Box score not available</h2>
+							<p>
+								The score and the quarter lines above come from the cached snapshot, but the
+								provider did not return player statistics for this game, so there is no box score
+								to show.
+							</p>
+							<p>When the stats feed answers for this game, the same page will fill in.</p>
+						</section>
+					) : (
+						<>
+							<section>
+								<h2>Top performers</h2>
+								<table>
+									<thead>
+										<tr>
+											<th scope="col">Player</th>
+											<th scope="col">Min</th>
+											<th scope="col">Pts</th>
+											<th scope="col">Reb</th>
+											<th scope="col">Ast</th>
+										</tr>
+									</thead>
+									<tbody>
+										{boxScore.top.map((player) => (
+											<tr>
+												<th scope="row">{player.playerName}</th>
+												<td>{player.min ?? '—'}</td>
+												<td>{stat(player.pts)}</td>
+												<td>{stat(player.reb)}</td>
+												<td>{stat(player.ast)}</td>
+											</tr>
+										))}
+									</tbody>
+								</table>
+							</section>
+
+							<section>
+								<h2>Full box score</h2>
+								<details>
+									<summary>Both rosters — {boxScore.total} players</summary>
+									<table>
+										<thead>
+											<tr>
+												<th scope="col">Player</th>
+												<th scope="col">Min</th>
+												<th scope="col">Pts</th>
+												<th scope="col">Reb</th>
+												<th scope="col">Ast</th>
+												<th scope="col">Stl</th>
+												<th scope="col">Blk</th>
+												<th scope="col">TO</th>
+												<th scope="col">PF</th>
+												<th scope="col">FG</th>
+												<th scope="col">3PT</th>
+												<th scope="col">FT</th>
+											</tr>
+										</thead>
+										<tbody>
+											{boxScore.full.map((player) => (
+												<tr>
+													<th scope="row">{player.playerName}</th>
+													<td>{player.min ?? '—'}</td>
+													<td>{stat(player.pts)}</td>
+													<td>{stat(player.reb)}</td>
+													<td>{stat(player.ast)}</td>
+													<td>{stat(player.stl)}</td>
+													<td>{stat(player.blk)}</td>
+													<td>{stat(player.turnover)}</td>
+													<td>{stat(player.pf)}</td>
+													<td>{shotLine(player.fgm, player.fga)}</td>
+													<td>{shotLine(player.fg3m, player.fg3a)}</td>
+													<td>{shotLine(player.ftm, player.fta)}</td>
+												</tr>
+											))}
+										</tbody>
+									</table>
+								</details>
+							</section>
+						</>
+					)}
+				</>
+			)}
+		</main>
+		<Footer />
+	</body>
+</html>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { FakeSupabase } from './testing/fake-supabase';
-import { getGameBoxScore, listGamesOn } from './tracker-cache';
+import { getGameBoxScore, latestSlateDate, listGamesOn, readSlateDay } from './tracker-cache';
 
 const BOSTON = {
 	id: 1,
@@ -315,6 +315,94 @@ describe('getGameBoxScore', () => {
 
 	it('answers not-configured when there is no client', async () => {
 		const result = await getGameBoxScore(2234, { client: null });
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.error.code).toBe('not-configured');
+	});
+});
+
+describe('latestSlateDate', () => {
+	it('answers the most recent date in one row, newest first', async () => {
+		const fake = fakeWithGames([{ game_date: '2026-10-25' }]);
+		const result = await latestSlateDate({ client: fake.asClient() });
+
+		expect(result).toEqual({ ok: true, value: '2026-10-25' });
+		const call = fake.recorded('games', 'select');
+		expect(call?.columns).toBe('game_date');
+		expect(call?.order).toEqual([{ column: 'game_date', ascending: false }]);
+		expect(call?.limit).toBe(1);
+	});
+
+	it('answers null when the cache holds no games at all', async () => {
+		const fake = fakeWithGames([]);
+		expect(await latestSlateDate({ client: fake.asClient() })).toEqual({ ok: true, value: null });
+	});
+
+	it('answers not-configured when there is no client', async () => {
+		const result = await latestSlateDate({ client: null });
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.error.code).toBe('not-configured');
+	});
+});
+
+describe('readSlateDay', () => {
+	const marker = (over: Record<string, unknown> = {}) => ({
+		game_date: '2026-10-27',
+		games: 8,
+		checked_at: '2026-10-27T21:00:00.000Z',
+		...over,
+	});
+
+	function fakeWithMarker(data: unknown, error?: { message: string; code?: string }) {
+		return new FakeSupabase({ tables: { slate_days: { select: { data, error: error ?? null } } } });
+	}
+
+	it('maps the row that says when the day was last checked', async () => {
+		const fake = fakeWithMarker([marker()]);
+		const result = await readSlateDay('2026-10-27', { client: fake.asClient() });
+
+		expect(result).toEqual({
+			ok: true,
+			value: { gameDate: '2026-10-27', games: 8, checkedAt: '2026-10-27T21:00:00.000Z' },
+		});
+		const call = fake.recorded('slate_days', 'select');
+		expect(call?.filters).toEqual([{ column: 'game_date', operator: 'eq', value: '2026-10-27' }]);
+	});
+
+	it('answers null for a day that has never been checked', async () => {
+		const fake = fakeWithMarker([]);
+		expect(await readSlateDay('2026-07-04', { client: fake.asClient() })).toEqual({ ok: true, value: null });
+	});
+
+	it('refuses a date that is not a calendar date, without querying', async () => {
+		const fake = fakeWithMarker([]);
+		const result = await readSlateDay('2026-02-30', { client: fake.asClient() });
+
+		expect(result.ok).toBe(false);
+		expect(fake.calls).toHaveLength(0);
+	});
+
+	it('reports a marker row it cannot read', async () => {
+		const fake = fakeWithMarker([marker({ checked_at: null })]);
+		const result = await readSlateDay('2026-10-27', { client: fake.asClient() });
+
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.error.message).toContain('checked_at');
+	});
+
+	it('classifies a failed read, which the ingest treats as no marker', async () => {
+		const fake = fakeWithMarker(null, { message: 'relation "slate_days" does not exist', code: '42P01' });
+		const result = await readSlateDay('2026-10-27', { client: fake.asClient() });
+
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.error.code).toBe('error');
+	});
+
+	it('answers not-configured when there is no client', async () => {
+		const result = await readSlateDay('2026-10-27', { client: null });
 		expect(result.ok).toBe(false);
 		if (result.ok) return;
 		expect(result.error.code).toBe('not-configured');

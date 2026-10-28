@@ -156,6 +156,9 @@ interface Setup {
 	gamesUpsert?: { data?: unknown; error?: { message: string; code?: string } };
 	statsUpsert?: { data?: unknown; error?: { message: string; code?: string } };
 	statsSelect?: { data?: unknown; error?: { message: string; code?: string } };
+	/** The slate-day marker row, or the error that says it cannot be read. */
+	marker?: { data?: unknown; error?: { message: string; code?: string } };
+	markerUpsert?: { data?: unknown; error?: { message: string; code?: string } };
 }
 
 function makeFake(setup: Setup) {
@@ -170,6 +173,10 @@ function makeFake(setup: Setup) {
 			player_stats: {
 				select: setup.statsSelect ?? { data: (setup.withStats ?? []).map((game_id) => ({ game_id })) },
 				upsert: setup.statsUpsert ?? { data: [] },
+			},
+			slate_days: {
+				select: setup.marker ?? { data: [] },
+				upsert: setup.markerUpsert ?? { data: [] },
 			},
 		},
 		rpc: { consume_upstream_budget: setup.budget.responder },
@@ -219,6 +226,36 @@ describe('the cache answers a refresh when it can', () => {
 		expect(report.notes[0]).toContain('every game is final');
 	});
 
+	it('re-checks a pre-game slate on its own clock, not the live one', async () => {
+		const scheduled = (ageMs: number) =>
+			cachedGame({
+				status: '2026-10-28T23:00:00Z',
+				period: null,
+				clock: null,
+				ingested_at: new Date(FIXED_NOW - ageMs).toISOString(),
+			});
+
+		// Two minutes old is stale for a game in progress and fresh for one that has
+		// not tipped off: nothing in the rows can have changed yet.
+		const fresh = await refresh(
+			{ cached: [scheduled(2 * 60 * 1000)], budget: budget({ limit: 400 }) },
+			{ data: [] },
+		);
+		const report = reportOf(fresh.result);
+		expect(report.status).toBe('fresh');
+		expect(report.requests.total).toBe(0);
+		expect(fresh.api.calls).toEqual([]);
+		expect(report.notes[0]).toContain('no game has started yet');
+
+		// But it is not settled either: the first tip-off has to be noticed.
+		const later = await refresh(
+			{ cached: [scheduled(11 * 60 * 1000)], budget: budget({ limit: 400 }) },
+			{ data: [] },
+		);
+		expect(reportOf(later.result).status).toBe('refreshed');
+		expect(later.api.calls).toHaveLength(1);
+	});
+
 	it('refreshes once the live window expires', async () => {
 		const cached = [cachedGame({ ingested_at: new Date(FIXED_NOW - 2 * 60 * 1000).toISOString() })];
 		const { result, api } = await refresh(
@@ -232,6 +269,58 @@ describe('the cache answers a refresh when it can', () => {
 
 	it('refreshes a day with nothing cached at all', async () => {
 		const { result, api } = await refresh({ budget: budget({ limit: 400 }) }, { data: [] });
+
+		expect(reportOf(result).status).toBe('refreshed');
+		expect(api.calls).toHaveLength(1);
+	});
+
+	it('spends nothing on a day it already asked about and found empty', async () => {
+		const marker = {
+			data: [{ game_date: DAY, games: 0, checked_at: new Date(FIXED_NOW - 60 * 60 * 1000).toISOString() }],
+		};
+		const { result, api, fake } = await refresh({ budget: budget({ limit: 400 }), marker }, { data: [] });
+
+		const report = reportOf(result);
+		expect(report.status).toBe('fresh');
+		expect(report.requests.total).toBe(0);
+		expect(api.calls).toEqual([]);
+		expect(fake.rpcCalls).toEqual([]);
+		expect(report.notes[0]).toContain('reported no games');
+	});
+
+	it('does not trust a marker that counted games the cache no longer holds', async () => {
+		// The marker is written after the slate, so this state means the rows went
+		// missing. Answering from it would serve an empty day for ten minutes.
+		const marker = {
+			data: [{ game_date: DAY, games: 12, checked_at: new Date(FIXED_NOW - 60 * 1000).toISOString() }],
+		};
+		const { result, api } = await refresh(
+			{ budget: budget({ limit: 400 }), marker, withStats: [5002] },
+			{ data: [FINAL_GAME] },
+		);
+
+		expect(reportOf(result).status).toBe('refreshed');
+		expect(api.calls).toHaveLength(1);
+	});
+
+	it('asks again about an empty day once its marker is half a day old', async () => {
+		const marker = {
+			data: [{ game_date: DAY, games: 0, checked_at: new Date(FIXED_NOW - 13 * 60 * 60 * 1000).toISOString() }],
+		};
+		const { result, api } = await refresh({ budget: budget({ limit: 400 }), marker }, { data: [] });
+
+		expect(reportOf(result).status).toBe('refreshed');
+		expect(api.calls).toHaveLength(1);
+	});
+
+	it('asks upstream when the marker cannot be read, rather than failing the page', async () => {
+		// What a database looks like between deploying this code and applying its
+		// migration: the table is not there, so the shortcut is simply unavailable.
+		const marker = { data: null, error: { message: 'relation "slate_days" does not exist', code: '42P01' } };
+		const { result, api } = await refresh(
+			{ budget: budget({ limit: 400 }), marker, withStats: [5002] },
+			{ data: [FINAL_GAME] },
+		);
 
 		expect(reportOf(result).status).toBe('refreshed');
 		expect(api.calls).toHaveLength(1);
@@ -371,6 +460,36 @@ describe('writes', () => {
 		if (result.ok) return;
 		expect(result.error.code).toBe('denied');
 	});
+
+	it('records the answer for the day, including an empty one', async () => {
+		const { fake } = await refresh({ budget: budget({ limit: 400 }) }, { data: [] });
+
+		const marker = fake.recorded('slate_days', 'upsert');
+		expect(marker?.onConflict).toBe('game_date');
+		expect((marker?.payload as Array<Record<string, unknown>>)[0]).toMatchObject({
+			game_date: DAY,
+			games: 0,
+			checked_at: new Date(FIXED_NOW).toISOString(),
+		});
+	});
+
+	it('still serves a slate whose marker row could not be written', async () => {
+		// The marker is bookkeeping. Losing it costs one request on the next view of
+		// an empty day; failing the refresh would cost the page its slate.
+		const { result } = await refresh(
+			{
+				budget: budget({ limit: 400 }),
+				withStats: [5002],
+				markerUpsert: { data: null, error: { message: 'permission denied', code: '42501' } },
+			},
+			{ data: [FINAL_GAME] },
+		);
+
+		const report = reportOf(result);
+		expect(report.status).toBe('refreshed');
+		expect(report.games).toBe(1);
+		expect(report.notes.join(' ')).toContain('slate-day marker could not be written');
+	});
 });
 
 describe('degradation', () => {
@@ -499,6 +618,31 @@ describe('mapping upstream payloads', () => {
 		const slate = parseGames([{ ...FINAL_GAME, status: 'Postponed', postponed: true }], DAY, ingestedAt);
 		expect(slate.games[0]?.settled).toBe(true);
 		expect(slate.games[0]?.live).toBe(false);
+	});
+
+	it('does not call a scheduled game live just because upstream sends period 0', () => {
+		// What the live endpoint sends before tip-off: period 0, no clock, and the
+		// tip-off instant in `status`. Counting that as live spent a stats request
+		// per scheduled game and put the whole day on the one-minute TTL.
+		const scheduled = {
+			...LIVE_GAME,
+			status: '2026-10-28T23:00:00Z',
+			status_state: 'scheduled',
+			period: 0,
+			time: null,
+			home_team_score: 0,
+			visitor_team_score: 0,
+			home_q1: null,
+			home_q2: null,
+			visitor_q1: null,
+			visitor_q2: null,
+		};
+		const slate = parseGames([scheduled], DAY, ingestedAt);
+
+		expect(slate.games[0]?.live).toBe(false);
+		expect(slate.games[0]?.settled).toBe(false);
+		// Zero is not a period many; the cache stores "has not started" as null.
+		expect(slate.games[0]?.row.period).toBeNull();
 	});
 
 	it('does not call a scheduled game live just because the clock is past', () => {
