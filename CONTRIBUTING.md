@@ -48,6 +48,15 @@ Three workflows touch production, and they are not interchangeable:
   not deploying for this stack; a change can be reviewed, released and still not
   be in the environment it describes.
 
+## Rolling back
+
+A bad release is reverted by pinning the previous `sha-<short>` image tag into a new task-definition
+revision — not by pointing the service at an older revision, because every revision pulls the mutable
+`:latest` and that would only restart the current code. The break-glass procedure, the permissions it
+needs, the checks that prove the old build is actually serving, and the measured rehearsal from
+2026-10-28 are in [docs/rollback.md](docs/rollback.md). The database is forward-only: a bad migration
+is fixed by a new migration, never by a rollback.
+
 ## Content
 
 Posts, authors and drills are content collections under `src/content/`, validated by
