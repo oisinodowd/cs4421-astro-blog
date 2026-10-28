@@ -4,12 +4,15 @@ import { parseGames, parseStats } from './slate-ingest';
 import {
 	describeStatus,
 	formatAge,
+	formatTipOff,
 	latestIngestedAt,
 	isStale,
+	liveState,
 	matchup,
 	quarterLines,
 	shotLine,
 	splitBoxScore,
+	stageLabel,
 	teamLabel,
 } from './slate-view';
 import { FakeSupabase } from './testing/fake-supabase';
@@ -45,6 +48,14 @@ function cached(over: Partial<CachedGame> = {}): CachedGame {
 		visitorScore: GAME.visitor_team_score,
 		homeQuarters: [GAME.home_q1, GAME.home_q2, GAME.home_q3, GAME.home_q4],
 		visitorQuarters: [GAME.visitor_q1, GAME.visitor_q2, GAME.visitor_q3, GAME.visitor_q4],
+		homeOvertimes: [],
+		visitorOvertimes: [],
+		tipOffAt: GAME.datetime,
+		istStage: GAME.ist_stage,
+		homeInBonus: GAME.home_in_bonus,
+		visitorInBonus: GAME.visitor_in_bonus,
+		homeTimeoutsRemaining: GAME.home_timeouts_remaining,
+		visitorTimeoutsRemaining: GAME.visitor_timeouts_remaining,
 		ingestedAt: INGESTED_AT,
 		...over,
 	};
@@ -143,6 +154,85 @@ describe('quarterLines', () => {
 		);
 		expect(lines[1]).toEqual({ label: 'Q2', home: 23, visitor: null });
 		expect(lines[3]).toEqual({ label: 'Q4', home: null, visitor: null });
+	});
+
+	it('adds a column per overtime period only when the game needed one', () => {
+		const lines = quarterLines(cached({ homeOvertimes: [8], visitorOvertimes: [11] }));
+
+		expect(lines.map((line) => line.label)).toEqual(['Q1', 'Q2', 'Q3', 'Q4', 'OT', 'T']);
+		expect(lines[4]).toEqual({ label: 'OT', home: 8, visitor: 11 });
+	});
+
+	it('numbers a second and third overtime rather than repeating the label', () => {
+		const lines = quarterLines(cached({ homeOvertimes: [8, 6], visitorOvertimes: [11, 4] }));
+
+		expect(lines.map((line) => line.label)).toEqual(['Q1', 'Q2', 'Q3', 'Q4', 'OT', '2OT', 'T']);
+	});
+
+	it('keeps the total last, so overtime does not move the sum', () => {
+		const lines = quarterLines(cached({ homeOvertimes: [8], visitorOvertimes: [11], homeScore: 131, visitorScore: 143 }));
+
+		expect(lines.at(-1)).toEqual({ label: 'T', home: 131, visitor: 143 });
+	});
+});
+
+describe('stageLabel', () => {
+	it('says nothing about a regular-season game', () => {
+		expect(stageLabel(cached())).toBeNull();
+	});
+
+	it('names the playoffs from the flag the cache stores', () => {
+		expect(stageLabel(cached({ postseason: true }))).toBe('Playoffs');
+	});
+
+	it('spells out the cup stage upstream sent as a machine name', () => {
+		expect(stageLabel(cached({ istStage: 'group_stage' }))).toBe('NBA Cup · Group stage');
+		expect(stageLabel(cached({ istStage: 'knockout' }))).toBe('NBA Cup · Knockout');
+	});
+
+	it('treats an unreadable stage as no stage', () => {
+		expect(stageLabel(cached({ istStage: '__' }))).toBeNull();
+	});
+});
+
+describe('formatTipOff', () => {
+	it('reads the captured tip-off as a date and a time in the tracker zone', () => {
+		expect(formatTipOff('2026-10-25T21:00:00.000Z')).toBe('Sun 25 Oct 2026 · 5:00 PM ET');
+	});
+
+	it('answers nothing for a value it cannot read', () => {
+		expect(formatTipOff(null)).toBeNull();
+		expect(formatTipOff('not a time')).toBeNull();
+	});
+});
+
+describe('liveState', () => {
+	it('says nothing about a finished game, whose last values upstream leaves in place', () => {
+		// The captured payload is a Final that still reports both teams in the bonus.
+		expect(cached().homeInBonus).toBe(true);
+		expect(liveState(cached(), describeStatus(cached()))).toBeNull();
+	});
+
+	it('reports the timeouts and the bonus while the game is being played', () => {
+		const live = cached({ status: '3rd Qtr', period: 3, clock: '4:31' });
+		expect(liveState(live, describeStatus(live))).toEqual({
+			visitorTimeouts: 2,
+			homeTimeouts: 2,
+			visitorInBonus: true,
+			homeInBonus: true,
+		});
+	});
+
+	it('answers nothing for a live game whose payload carried neither field', () => {
+		const bare = cached({
+			status: '1st Qtr',
+			period: 1,
+			homeInBonus: null,
+			visitorInBonus: null,
+			homeTimeoutsRemaining: null,
+			visitorTimeoutsRemaining: null,
+		});
+		expect(liveState(bare, describeStatus(bare))).toBeNull();
 	});
 });
 

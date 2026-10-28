@@ -8,15 +8,18 @@ import { refreshSlate } from '../../../utils/slate-ingest';
 import {
 	describeStatus,
 	formatAge,
+	formatTipOff,
 	isStale,
+	liveState,
 	matchup,
 	quarterLines,
 	shotLine,
 	splitBoxScore,
+	stageLabel,
 	teamLabel,
 	TRACKER_TIME_ZONE,
 } from '../../../utils/slate-view';
-import { getGameBoxScore } from '../../../utils/tracker-cache';
+import { getGameBoxScore, type CachedTeam } from '../../../utils/tracker-cache';
 
 // The score, the status and the box score all move; none of it can be baked.
 export const prerender = false;
@@ -53,6 +56,39 @@ const game = lookup?.ok ? lookup.value.game : null;
 const status = game === null ? null : describeStatus(game);
 const lines = game === null ? [] : quarterLines(game);
 const boxScore = lookup?.ok ? splitBoxScore(lookup.value.players) : null;
+
+// Everything else upstream tells us about this game, since the box score is the
+// only part of it the entitlement may not reach.
+const stage = game === null ? null : stageLabel(game);
+const tipOff = game === null ? null : formatTipOff(game.tipOffAt);
+const live = game === null || status === null ? null : liveState(game, status);
+
+/** "In the bonus" names the teams it applies to, not just that it happened. */
+const inBonusTeams =
+	live === null || game === null
+		? []
+		: [
+				...(live.visitorInBonus === true ? [teamLabel(game.visitorTeam)] : []),
+				...(live.homeInBonus === true ? [teamLabel(game.homeTeam)] : []),
+			];
+const bonusText =
+	live === null || (live.visitorInBonus === null && live.homeInBonus === null)
+		? null
+		: inBonusTeams.length === 0
+			? 'Neither team'
+			: inBonusTeams.join(' and ');
+
+/** Full name with the division and conference upstream files the team under. */
+const teamLine = (team: CachedTeam | null) => {
+	if (team === null) return 'TBD';
+	const placement =
+		team.division === null
+			? null
+			: team.conference === null
+				? team.division
+				: `${team.division} (${team.conference})`;
+	return [team.fullName, placement].filter((part) => part !== null).join(' · ');
+};
 
 const ageMs = game === null ? null : now - Date.parse(game.ingestedAt);
 const stale = status !== null && isStale(ageMs, status.live);
@@ -164,6 +200,19 @@ const stat = (value: number | null) => value ?? '—';
 				border-radius: 18px;
 				background: rgba(255, 255, 255, 0.7);
 			}
+			.info th,
+			.info td {
+				text-align: left;
+				vertical-align: top;
+			}
+			.info th {
+				width: 9rem;
+				font-weight: 600;
+				color: rgb(var(--gray));
+			}
+			.info td {
+				line-height: 1.5;
+			}
 			details {
 				margin-top: 1.5em;
 				padding: 0.75rem 1rem;
@@ -250,6 +299,7 @@ const stat = (value: number | null) => value ?? '—';
 					<h1 class="matchup">{matchup(game)}</h1>
 					<div class="scoreline">
 						<span class:list={['status', { live: status.live }]}>{status.label}</span>
+						{stage !== null && <span class="status">{stage}</span>}
 						<span>
 							{game.visitorScore ?? '—'}–{game.homeScore ?? '—'}
 						</span>
@@ -297,6 +347,47 @@ const stat = (value: number | null) => value ?? '—';
 								</tbody>
 							</table>
 						</div>
+					</section>
+
+					<section>
+						<h2>Game information</h2>
+						<table class="info">
+							<tbody>
+								{tipOff !== null && (
+									<tr>
+										<th scope="row">Tip-off</th>
+										<td>{tipOff}</td>
+									</tr>
+								)}
+								<tr>
+									<th scope="row">Stage</th>
+									<td>{stage ?? 'Regular season'}</td>
+								</tr>
+								{live !== null && (live.visitorTimeouts !== null || live.homeTimeouts !== null) && (
+									<tr>
+										<th scope="row">Timeouts left</th>
+										<td>
+											{teamLabel(game.visitorTeam)} {live.visitorTimeouts ?? '—'} ·{' '}
+											{teamLabel(game.homeTeam)} {live.homeTimeouts ?? '—'}
+										</td>
+									</tr>
+								)}
+								{bonusText !== null && (
+									<tr>
+										<th scope="row">In the bonus</th>
+										<td>{bonusText}</td>
+									</tr>
+								)}
+								<tr>
+									<th scope="row">Teams</th>
+									<td>
+										{teamLine(game.visitorTeam)}
+										<br />
+										{teamLine(game.homeTeam)}
+									</td>
+								</tr>
+							</tbody>
+						</table>
 					</section>
 
 					{boxScore.total === 0 ? (
