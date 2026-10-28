@@ -73,6 +73,15 @@ Nothing in there throws. A missing credential, an unreachable database and a
 refused statement all come back as a `Result`, because a container with no
 credentials still has to serve pages (#94).
 
+The tracker's two routes are both SSR: `/nba` renders the day's slate
+(`?date=YYYY-MM-DD` for another day) and `/nba/game/<id>` renders one game. Each
+page calls `refreshSlate` for the day it is about and renders whatever the cache
+holds, including when that refresh was refused — the TTL rules in
+`slate-ingest.ts` decide what a view costs, and a day upstream reported as empty
+is remembered in `slate_days` so the empty state costs nothing. `slate-view.ts`
+turns cached rows into the labels and tables both pages print, so the two cannot
+disagree about whether a game is live.
+
 The tests fake the client (`src/utils/testing/fake-supabase.ts`) rather than
 reaching a network, so `npm run test:unit` passes offline: the suite runs with
 all network access denied and still passes, which is also why CI can run it with

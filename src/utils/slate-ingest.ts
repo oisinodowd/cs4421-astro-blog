@@ -6,6 +6,8 @@
  *  - **Nobody pays for a page view twice.** A refresh reads the cache first. If
  *    the day's rows were written recently enough -- a minute while a game is
  *    live, half a day once every game is final -- it spends nothing and says so.
+ *    A day upstream said was empty is remembered the same way, through the
+ *    `slate_days` marker, so an off-season page view costs nothing either.
  *  - **Every upstream request is recorded.** The count comes from the budget
  *    guard, not from the client's own tally: a request is only sent if the shared
  *    `upstream_budget` row allowed it, so what is spent and what is recorded
@@ -24,7 +26,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { type BalldontlieClient, createBalldontlieClient, type BudgetSpend, type UpstreamRow } from './balldontlie';
 import { classifyError, failure, resolveClient, success, type ClientOption, type Result } from './db';
 import { isRecord, readCalendarDate, readNumber, readString } from './json';
-import { gameIdsWithStats, listGamesOn, type CachedGame } from './tracker-cache';
+import { gameIdsWithStats, listGamesOn, readSlateDay, type CachedGame } from './tracker-cache';
 import { consumeBudget } from './upstream-budget';
 
 /**
@@ -33,6 +35,11 @@ import { consumeBudget } from './upstream-budget';
  */
 const LIVE_TTL_MS = 60 * 1000;
 const SETTLED_TTL_MS = 12 * 60 * 60 * 1000;
+/**
+ * A slate where nothing has tipped off still needs re-checking before the first
+ * game starts, but not every minute: its rows cannot change until a game does.
+ */
+const SCHEDULED_TTL_MS = 10 * 60 * 1000;
 
 /**
  * Conservative on purpose: the free tier's limits are not published, so the
@@ -52,6 +59,7 @@ export interface RefreshOptions extends ClientOption {
 	now?: () => number;
 	liveTtlMs?: number;
 	settledTtlMs?: number;
+	scheduledTtlMs?: number;
 }
 
 export interface SlateRefreshReport {
@@ -115,20 +123,24 @@ export function parseGames(rows: UpstreamRow[], date: string, ingestedAt: string
 		}
 
 		const status = readString(row.status) ?? 'Unknown';
-		const period = readNumber(row.period);
+		// Upstream sends `0` for a game that has not started, not null. Zero is a
+		// period number only to upstream: null is the truthful stored value, and it
+		// is what makes "has a period" mean "has started" everywhere downstream.
+		const period = whole(row.period);
+		const started = period !== null && period > 0;
 		const postponed = row.postponed === true;
 		const settled = postponed || isFinal(status);
 
 		games.push({
 			id,
-			live: !settled && (isInProgress(row.status_state) || period !== null),
+			live: !settled && (isInProgress(row.status_state) || started),
 			postponed,
 			settled,
 			row: {
 				id,
 				game_date: date,
 				status,
-				period: period === null ? null : Math.trunc(period),
+				period: started ? period : null,
 				// Upstream calls this `time`: "4:31" while live, "Final" once it is not.
 				clock: readString(row.time),
 				postseason: row.postseason === true,
@@ -287,27 +299,44 @@ export async function refreshSlate(
 	const cached = await listGamesOn(day, { client });
 	if (!cached.ok) return cached;
 
-	const ttl = ttlFor(cached.value, options);
-	const age = ageOf(cached.value, now());
-	// A day with no cached games has no row to carry a timestamp, so an empty day
-	// is re-checked on every refresh -- there is nothing that says "we looked and
-	// there was nothing". On an off-season day that is one request per page view,
-	// bounded by the shared allowance and visible in the ledger. The fix is a
-	// marker row, which is a migration rather than a client change.
-	if (cached.value.length > 0 && age !== null && age < ttl.ms) {
-		return success({
-			date: day,
-			status: 'fresh',
-			requests: { games: 0, stats: 0, total: 0 },
-			budget: null,
-			games: cached.value.length,
-			teams: 0,
-			statRows: 0,
-			liveGames: cached.value.filter(isLiveRow).length,
-			skipped: [],
-			problems: [],
-			notes: [`the cache for ${day} is ${Math.round(age / 1000)}s old and ${ttl.reason}, so nothing was spent`],
-		});
+	const at = now();
+	const cachedGames = cached.value;
+
+	if (cachedGames.length > 0) {
+		const ttl = ttlFor(cachedGames, options);
+		const age = ageOf(cachedGames, at);
+		if (age !== null && age < ttl.ms) {
+			return success(
+				freshReport(
+					day,
+					cachedGames,
+					`the cache for ${day} is ${Math.round(age / 1000)}s old and ${ttl.reason}, so nothing was spent`,
+				),
+			);
+		}
+	} else {
+		// A day with no games has no row in `games` to carry a timestamp, so the
+		// marker row says when upstream was last asked about it. With no marker -- a
+		// day never checked, or a database where the migration has not been applied
+		// yet -- the refresh asks upstream, which is what it did before the marker
+		// existed. A marker that cannot be read is not a reason to fail a page.
+		const marker = await readSlateDay(day, { client });
+		// Only a marker that says there were no games may stand in for rows that are
+		// not there. A marker that counted games the cache no longer holds is a
+		// disagreement worth a request: the rows were lost, not never written.
+		if (marker.ok && marker.value !== null && marker.value.games === 0) {
+			const checked = Date.parse(marker.value.checkedAt);
+			const settledTtlMs = options.settledTtlMs ?? SETTLED_TTL_MS;
+			if (Number.isFinite(checked) && at - checked < settledTtlMs) {
+				return success(
+					freshReport(
+						day,
+						cachedGames,
+						`upstream was asked about ${day} ${Math.round((at - checked) / 1000)}s ago and reported no games, so nothing was spent`,
+					),
+				);
+			}
+		}
 	}
 
 	const report: SlateRefreshReport = {
@@ -353,7 +382,7 @@ export async function refreshSlate(
 		return success(report);
 	}
 
-	const ingestedAt = new Date(now()).toISOString();
+	const ingestedAt = new Date(at).toISOString();
 	const slate = parseGames(gamesPage.value.rows, day, ingestedAt);
 	report.problems.push(...slate.problems);
 	report.liveGames = slate.games.filter((game) => game.live).length;
@@ -370,6 +399,20 @@ export async function refreshSlate(
 	);
 	if (!gamesWritten.ok) return gamesWritten;
 	report.games = slate.games.length;
+
+	// Record that upstream was asked about this day, including when the answer was
+	// "no games": that row is what makes the next view of an empty slate free
+	// (#98). Failing to write it must not fail a refresh whose slate did land --
+	// the pages only lose the empty-day shortcut -- so it is a note, not an error.
+	const marked = await upsert(
+		client,
+		'slate_days',
+		[{ game_date: day, games: slate.games.length, checked_at: ingestedAt }],
+		'game_date',
+	);
+	if (!marked.ok) {
+		report.notes.push(`the slate-day marker could not be written (${marked.error.code})`);
+	}
 
 	// Step three: box scores. Live games are re-read every refresh; a game that has
 	// just gone final is read once more for its finished numbers. A settled game
@@ -432,12 +475,34 @@ async function upsert(
 	return success(undefined);
 }
 
+/** The day's cached rows and nothing spent: the report a page renders from. */
+function freshReport(day: string, games: CachedGame[], note: string): SlateRefreshReport {
+	return {
+		date: day,
+		status: 'fresh',
+		requests: { games: 0, stats: 0, total: 0 },
+		budget: null,
+		games: games.length,
+		teams: 0,
+		statRows: 0,
+		liveGames: games.filter(isLiveRow).length,
+		skipped: [],
+		problems: [],
+		notes: [note],
+	};
+}
+
 /** The TTL that applies to a cached day, and why -- the reason goes in the report. */
 function ttlFor(cached: CachedGame[], options: RefreshOptions): { ms: number; reason: string } {
-	const settled = cached.every((game) => isSettledRow(game));
-	return settled
-		? { ms: options.settledTtlMs ?? SETTLED_TTL_MS, reason: 'every game is final' }
-		: { ms: options.liveTtlMs ?? LIVE_TTL_MS, reason: 'a game is still being played' };
+	if (cached.every((game) => isSettledRow(game))) {
+		return { ms: options.settledTtlMs ?? SETTLED_TTL_MS, reason: 'every game is final' };
+	}
+	// A pre-game slate is not a live one: nothing can change until a game tips
+	// off, and asking every minute before then would spend a request per viewer.
+	if (cached.some(isLiveRow)) {
+		return { ms: options.liveTtlMs ?? LIVE_TTL_MS, reason: 'a game is still being played' };
+	}
+	return { ms: options.scheduledTtlMs ?? SCHEDULED_TTL_MS, reason: 'no game has started yet' };
 }
 
 function ageOf(cached: CachedGame[], now: number): number | null {

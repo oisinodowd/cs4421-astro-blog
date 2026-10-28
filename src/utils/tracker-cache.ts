@@ -86,6 +86,13 @@ export interface CachedBoxScore {
 	players: CachedPlayerStat[];
 }
 
+/** Bookkeeping for a day, not a slate: no page renders from this. */
+export interface CachedSlateDay {
+	gameDate: string;
+	games: number;
+	checkedAt: string;
+}
+
 // The foreign key names are what disambiguate two embeds of the same table: a
 // game has a home team and a visitor team, and both are rows in `teams`.
 const GAME_EMBEDS =
@@ -120,6 +127,72 @@ export async function listGamesOn(
 		games.push(mapped.value);
 	}
 	return success(games);
+}
+
+/**
+ * The most recent day the cache holds games for, or null when it holds none.
+ *
+ * The empty state links to it: an off-season page should offer a slate that
+ * exists rather than an apology. It reads `games`, not the day markers, because
+ * a day that was checked and found empty is not a slate a visitor can look at.
+ */
+export async function latestSlateDate(options: ClientOption = {}): Promise<Result<string | null>> {
+	const client = resolveClient(options);
+	if (client === null) return notConfigured();
+
+	const response = await client
+		.from('games')
+		.select('game_date')
+		.order('game_date', { ascending: false })
+		.limit(1);
+
+	if (response.error) return { ok: false, error: classifyError(response.error) };
+	if (!Array.isArray(response.data)) return failure('error', 'expected a list of game dates');
+
+	const [row] = response.data;
+	if (row === undefined) return success(null);
+	const date = readCalendarDate(isRecord(row) ? row.game_date : null);
+	if (date === null) return failure('error', 'the most recent game row has no readable game_date');
+	return success(date);
+}
+
+/**
+ * When upstream was last asked about this day, or null when it never was.
+ *
+ * A day with no games has no row in `games` to carry a timestamp; this marker is
+ * what stops an empty day from being re-asked on every page view (#98). A
+ * marker row that cannot be read is reported, never guessed: the refresh spends
+ * a request instead, which is what it did before the table existed.
+ */
+export async function readSlateDay(
+	gameDate: string,
+	options: ClientOption = {},
+): Promise<Result<CachedSlateDay | null>> {
+	const client = resolveClient(options);
+	if (client === null) return notConfigured();
+
+	const date = readCalendarDate(gameDate);
+	if (date === null) {
+		return failure('error', `gameDate must be a calendar date as YYYY-MM-DD, got ${JSON.stringify(gameDate)}`);
+	}
+
+	const response = await client
+		.from('slate_days')
+		.select('game_date, games, checked_at')
+		.eq('game_date', date)
+		.maybeSingle();
+
+	if (response.error) return { ok: false, error: classifyError(response.error) };
+	if (response.data === null || response.data === undefined) return success(null);
+	if (!isRecord(response.data)) return failure('error', 'expected a slate day row');
+
+	const games = readNumber(response.data.games);
+	const checkedAt = readString(response.data.checked_at);
+	if (games === null || !Number.isInteger(games) || games < 0 || checkedAt === null) {
+		return failure('error', 'a slate day row is missing a whole `games` count or `checked_at`');
+	}
+
+	return success({ gameDate: date, games, checkedAt });
 }
 
 /** One game and its box score, which is one query and one nested read. */

@@ -1,0 +1,364 @@
+---
+import BaseHead from '../../components/BaseHead.astro';
+import Footer from '../../components/Footer.astro';
+import Header from '../../components/Header.astro';
+import { SITE_TITLE } from '../../consts';
+import { readCalendarDate } from '../../utils/db';
+import { calendarDateIn, formatCalendarDate } from '../../utils/date';
+import { refreshSlate } from '../../utils/slate-ingest';
+import {
+	describeStatus,
+	formatAge,
+	isStale,
+	latestIngestedAt,
+	matchup,
+	quarterLines,
+	teamLabel,
+	TRACKER_TIME_ZONE,
+} from '../../utils/slate-view';
+import { latestSlateDate, listGamesOn } from '../../utils/tracker-cache';
+
+// A page that answers "what is happening now" cannot be baked at build time.
+export const prerender = false;
+
+const now = Date.now();
+const today = calendarDateIn(TRACKER_TIME_ZONE, now);
+const requested = Astro.url.searchParams.get('date');
+const day = requested === null ? today : readCalendarDate(requested);
+
+if (day === null) {
+	Astro.response.status = 400;
+}
+
+// The refresh is TTL-bound (#97): a live slate costs at most one request a
+// minute, a settled one nothing for half a day, and an empty day nothing at all
+// once it has been checked. The page then renders whatever the cache holds,
+// including when the refresh could not happen.
+const refresh = day === null ? null : await refreshSlate(day);
+const cached = day === null ? null : await listGamesOn(day);
+
+const slate = cached?.ok ? cached.value : [];
+const liveCount = slate.filter((game) => describeStatus(game).live).length;
+const snapshot = latestIngestedAt(slate);
+const ageMs = snapshot === null ? null : now - Date.parse(snapshot);
+const stale = slate.length > 0 && isStale(ageMs, liveCount > 0);
+
+// A degraded refresh is not one thing. When the games request was refused, the
+// scores on this page are the last cached ones and the page says so. When only
+// some box scores were skipped -- the entitlement this deployment has -- the
+// slate itself is current, and warning about the score feed would be false; the
+// game page is where a missing box score belongs.
+const refreshFailed =
+	refresh !== null &&
+	(!refresh.ok || (refresh.value.status === 'degraded' && refresh.value.requests.games === 0));
+
+const warning =
+	slate.length === 0
+		? null
+		: refreshFailed
+			? 'The score feed could not be refreshed just now, so these are the last numbers the cache holds.'
+			: stale && ageMs !== null
+				? `This snapshot is ${formatAge(ageMs)}; the scores may have moved on.`
+				: null;
+
+// Only an empty page needs somewhere else to go, and only a readable cache can
+// say where that is.
+const latest = slate.length === 0 && cached?.ok ? await latestSlateDate() : null;
+const mostRecent = latest?.ok ? latest.value : null;
+
+const notConfigured = cached !== null && !cached.ok && cached.error.code === 'not-configured';
+
+const title =
+	day === null ? `Not a date — ${SITE_TITLE}` : `NBA slate, ${formatCalendarDate(day)} — ${SITE_TITLE}`;
+const description =
+	'The day\'s NBA games with scores, live status and quarter lines, read from the site\'s own cache.';
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<BaseHead title={title} description={description} />
+		<style>
+			.page-shell {
+				width: 960px;
+				max-width: calc(100% - 2em);
+				margin: auto;
+				padding: 1em 1em 3em;
+			}
+			.intro {
+				margin: 2em 0 2em;
+			}
+			.eyebrow {
+				margin: 0 0 0.5rem;
+				color: rgb(var(--gray));
+				font-size: 0.8rem;
+				letter-spacing: 0.12em;
+				text-transform: uppercase;
+			}
+			.intro h1 {
+				margin: 0 0 0.5em;
+			}
+			.lede {
+				max-width: 44rem;
+				margin: 0;
+				color: rgb(var(--gray-dark));
+				line-height: 1.7;
+			}
+			.freshness {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 0.5rem 1rem;
+				margin: 0 0 1.5em;
+				padding: 0.75rem 1rem;
+				border: 1px solid rgba(var(--gray-light), 0.8);
+				border-radius: 12px;
+				font-size: 0.85rem;
+				color: rgb(var(--gray));
+			}
+			.warning {
+				margin: 0 0 1.5em;
+				padding: 0.75rem 1rem;
+				border-left: 4px solid rgb(var(--accent));
+				background: rgba(255, 255, 255, 0.7);
+				font-size: 0.9rem;
+				line-height: 1.6;
+				color: rgb(var(--gray-dark));
+			}
+			.slate {
+				display: grid;
+				gap: 1.25rem;
+				list-style-type: none;
+				margin: 0;
+				padding: 0;
+			}
+			.game {
+				padding: 1.25rem 1.5rem;
+				border: 1px solid rgba(var(--gray-light), 0.8);
+				border-radius: 18px;
+				background: rgba(255, 255, 255, 0.7);
+			}
+			.game.live {
+				border-color: rgb(var(--accent));
+			}
+			.game-head {
+				display: flex;
+				flex-wrap: wrap;
+				align-items: baseline;
+				justify-content: space-between;
+				gap: 0.5rem 1rem;
+				margin-bottom: 0.75rem;
+			}
+			.game-head h2 {
+				margin: 0;
+				font-size: 1.15rem;
+			}
+			.game-head a {
+				color: rgb(var(--black));
+				text-decoration: none;
+			}
+			.game-head a:hover h2 {
+				color: rgb(var(--accent));
+			}
+			.status {
+				padding: 0.15rem 0.6rem;
+				border: 1px solid rgb(var(--gray-light));
+				border-radius: 999px;
+				font-size: 0.8rem;
+				color: rgb(var(--gray));
+				white-space: nowrap;
+			}
+			.status.live {
+				border-color: rgb(var(--accent));
+				color: rgb(var(--accent));
+				font-weight: 600;
+			}
+			table {
+				width: 100%;
+				border-collapse: collapse;
+				font-variant-numeric: tabular-nums;
+			}
+			th,
+			td {
+				padding: 0.35rem 0.5rem;
+				text-align: right;
+				font-size: 0.9rem;
+			}
+			th:first-child,
+			td:first-child {
+				text-align: left;
+			}
+			thead th {
+				font-size: 0.75rem;
+				letter-spacing: 0.08em;
+				text-transform: uppercase;
+				color: rgb(var(--gray));
+				font-weight: 500;
+			}
+			tbody th {
+				font-weight: 600;
+			}
+			tbody tr + tr th,
+			tbody tr + tr td {
+				border-top: 1px solid rgba(var(--gray-light), 0.6);
+			}
+			.total {
+				font-weight: 700;
+			}
+			.notice,
+			.empty {
+				padding: 1.5rem;
+				border: 1px solid rgba(var(--gray-light), 0.8);
+				border-radius: 18px;
+				background: rgba(255, 255, 255, 0.7);
+			}
+			.notice h2,
+			.empty h2 {
+				margin: 0 0 0.5rem;
+				font-size: 1.1rem;
+			}
+			.notice p,
+			.empty p {
+				margin: 0 0 0.75rem;
+				max-width: 44rem;
+				line-height: 1.7;
+				color: rgb(var(--gray-dark));
+			}
+			.notice p:last-child,
+			.empty p:last-child {
+				margin-bottom: 0;
+			}
+			@media (max-width: 640px) {
+				th,
+				td {
+					padding: 0.3rem 0.25rem;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<Header />
+		<main class="page-shell">
+			{
+				day === null ? (
+					<>
+						<header class="intro">
+							<p class="eyebrow">NBA tracker</p>
+							<h1>That is not a date</h1>
+							<p class="lede">
+								A slate is asked for by calendar date, as <code>?date=YYYY-MM-DD</code>.{' '}
+								<a href="/nba">Show today's slate</a>.
+							</p>
+						</header>
+					</>
+				) : (
+					<>
+						<header class="intro">
+							<p class="eyebrow">NBA tracker</p>
+							<h1>Slate · {formatCalendarDate(day)}</h1>
+							{day === today ? (
+								<p class="lede">
+									Today's games, with the score, the state of play and the quarter lines. Every
+									number here comes from the site's own cache rather than a request per visitor.
+								</p>
+							) : (
+								<p class="lede">
+									<a href="/nba">← Today's slate</a>
+								</p>
+							)}
+						</header>
+
+						{slate.length > 0 && (
+							<p class="freshness">
+								<span>Snapshot updated {ageMs === null ? 'at an unreadable time' : formatAge(ageMs)}</span>
+								<span>
+									{slate.length} game{slate.length === 1 ? '' : 's'}
+									{liveCount > 0 ? ` · ${liveCount} in progress` : ''}
+								</span>
+							</p>
+						)}
+
+						{warning !== null && <p class="warning">{warning}</p>}
+
+						{cached !== null && !cached.ok && (
+							<section class="notice">
+								<h2>The slate is unavailable</h2>
+								<p>
+									{notConfigured
+										? 'This deployment has no tracker database configured, so there is no slate to show. The rest of the site still works.'
+										: 'The cache could not be read just now. Nothing has been guessed in its place; try again in a moment.'}
+								</p>
+							</section>
+						)}
+
+						{cached?.ok && slate.length === 0 && (
+							<section class="empty">
+								<h2>No games {day === today ? 'today' : `on ${formatCalendarDate(day)}`}</h2>
+								<p>
+									The NBA has nothing on the schedule for this day. An empty day is remembered, so
+									looking again does not spend another request on it.
+								</p>
+								{mostRecent !== null && mostRecent !== day && (
+									<p>
+										<a href={`/nba?date=${mostRecent}`}>
+											Show the most recent slate, {formatCalendarDate(mostRecent)}
+										</a>
+									</p>
+								)}
+							</section>
+						)}
+
+						{slate.length > 0 && (
+							<ul class="slate">
+								{slate.map((game) => {
+									const status = describeStatus(game);
+									const lines = quarterLines(game);
+									return (
+										<li class:list={['game', { live: status.live }]}>
+											<div class="game-head">
+												<a href={`/nba/game/${game.id}/`}>
+													<h2>{matchup(game)}</h2>
+												</a>
+												<span class:list={['status', { live: status.live }]}>{status.label}</span>
+											</div>
+											<table>
+												<thead>
+													<tr>
+														<th scope="col">Team</th>
+														{lines.map((line) => (
+															<th scope="col">{line.label}</th>
+														))}
+													</tr>
+												</thead>
+												<tbody>
+													<tr>
+														<th scope="row" title={game.visitorTeam?.fullName}>
+															{teamLabel(game.visitorTeam)}
+														</th>
+														{lines.map((line) => (
+															<td class={line.label === 'T' ? 'total' : undefined}>
+																{line.visitor ?? '—'}
+															</td>
+														))}
+													</tr>
+													<tr>
+														<th scope="row" title={game.homeTeam?.fullName}>
+															{teamLabel(game.homeTeam)}
+														</th>
+														{lines.map((line) => (
+															<td class={line.label === 'T' ? 'total' : undefined}>{line.home ?? '—'}</td>
+														))}
+													</tr>
+												</tbody>
+											</table>
+										</li>
+									);
+								})}
+							</ul>
+						)}
+					</>
+				)
+			}
+		</main>
+		<Footer />
+	</body>
+</html>
