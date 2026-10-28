@@ -15,30 +15,32 @@ export const prerender = true;
 		<Header />
 		<main class="page-shell">
 			<section class="hero">
-				<p class="eyebrow">A personal corner of the web</p>
-				<h1>Thoughtful writing for curious builders.</h1>
+				<p class="eyebrow">Scores, games and drills</p>
+				<h1>The slate, the game, the numbers behind it.</h1>
 				<p class="lede">
-					Northstar Notes is a lightweight journal for product ideas, engineering experiments,
-					and lessons learned while building in public.
+					Today's NBA games, a page for each one, and a catalogue of drills. Scores are
+					fetched once, cached, and refreshed on a timer, so reading a page does not spend a
+					request — and a snapshot that has gone stale says so instead of pretending to be live.
 				</p>
 				<div class="cta-row">
-					<a href="/blog">Read the journal</a>
-					<a href="/about" class="secondary">Learn more</a>
+					<a href="/nba">Open today's slate</a>
+					<a href="/drills" class="secondary">Browse the drills</a>
+					<a href="/about" class="secondary">About this site</a>
 				</div>
 			</section>
 
 			<section class="feature-grid">
 				<article>
-					<h2>What I write about</h2>
-					<p>Product thinking, development workflows, shipping faster, and the small details that make systems resilient.</p>
+					<h2>Today's slate</h2>
+					<p>Every game on the day with its status, tip-off time and line score. A live slate costs at most one request a minute; a settled one costs nothing for half a day.</p>
 				</article>
 				<article>
-					<h2>What I value</h2>
-					<p>Clear communication, deliberate iteration, and building experiences that are useful before they are flashy.</p>
+					<h2>One page per game</h2>
+					<p>Quarter lines, overtime when it was needed, tip-off, stage and both teams — with timeouts and the bonus while the game is being played.</p>
 				</article>
 				<article>
-					<h2>How I work</h2>
-					<p>Ship small, learn quickly, write down the lessons, and keep improving the system that supports the work.</p>
+					<h2>The drill catalogue</h2>
+					<p>One markdown file per drill, each naming the numbers a session records, so the catalogue cannot promise a measurement the tables cannot store.</p>
 				</article>
 			</section>
 		</main>
