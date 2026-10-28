@@ -154,6 +154,33 @@ export async function getGameBoxScore(
 	return success({ game: game.value, players: players.value });
 }
 
+/**
+ * Which of these games already have box score rows.
+ *
+ * The ingest asks before spending a stats request: a settled game whose numbers
+ * are already stored is never re-read, which is what keeps a page view on a
+ * finished slate from costing anything upstream.
+ */
+export async function gameIdsWithStats(
+	gameIds: number[],
+	options: ClientOption = {},
+): Promise<Result<number[]>> {
+	const client = resolveClient(options);
+	if (client === null) return notConfigured();
+	if (gameIds.length === 0) return success([]);
+
+	const response = await client.from('player_stats').select('game_id').in('game_id', gameIds);
+	if (response.error) return { ok: false, error: classifyError(response.error) };
+	if (!Array.isArray(response.data)) return failure('error', 'expected a list of player stat rows');
+
+	const ids = new Set<number>();
+	for (const row of response.data) {
+		const id = readNumber(isRecord(row) ? row.game_id : null);
+		if (id !== null && Number.isInteger(id)) ids.add(id);
+	}
+	return success([...ids].sort((a, b) => a - b));
+}
+
 // --- mapping ----------------------------------------------------------------
 
 function toGame(row: unknown): Result<CachedGame> {
