@@ -1,9 +1,11 @@
 ---
+import { SITE_TITLE } from '../consts';
+
 const today = new Date();
 ---
 
 <footer>
-	&copy; {today.getFullYear()} Northstar Notes. Built with Astro.
+	&copy; {today.getFullYear()} {SITE_TITLE}. Built with Astro.
 </footer>
 <style>
 	footer {

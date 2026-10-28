@@ -1,36 +1,138 @@
 ---
-import AboutHeroImage from '../assets/blog-placeholder-about.jpg';
-import Layout from '../layouts/BlogPost.astro';
+import BaseHead from '../components/BaseHead.astro';
+import Footer from '../components/Footer.astro';
+import Header from '../components/Header.astro';
+import { SITE_DESCRIPTION, SITE_TITLE } from '../consts';
+
 export const prerender = true;
+
+const title = `About — ${SITE_TITLE}`;
 ---
 
-<Layout
-	title="About Northstar Notes"
-	description="A brief introduction to the ideas behind this blog."
-	pubDate={new Date('August 08 2021')}
-	heroImage={AboutHeroImage}
->
-	<p>
-		Northstar Notes is a simple publishing space for ideas that deserve to live longer than a chat
-		snapshot. I use it to capture thoughtful observations about product work, software delivery,
-		and the habits that help teams learn and improve over time.
-	</p>
+<!doctype html>
+<html lang="en">
+	<head>
+		<BaseHead title={title} description={SITE_DESCRIPTION} />
+		<style>
+			.page-shell {
+				width: 760px;
+				max-width: calc(100% - 2em);
+				margin: auto;
+				padding: 1em 1em 4em;
+			}
+			.intro {
+				margin: 2em 0 2.5em;
+			}
+			.eyebrow {
+				margin: 0 0 0.5rem;
+				color: rgb(var(--gray));
+				font-size: 0.8rem;
+				letter-spacing: 0.12em;
+				text-transform: uppercase;
+			}
+			.intro h1 {
+				margin: 0 0 0.5em;
+				line-height: 1.1;
+			}
+			.lede,
+			section p,
+			.outro {
+				line-height: 1.7;
+				color: rgb(var(--gray-dark));
+			}
+			.lede {
+				margin: 0;
+				font-size: 1.1rem;
+			}
+			section {
+				margin-bottom: 2.25em;
+			}
+			section h2 {
+				margin: 0 0 0.6em;
+				font-size: 1.05rem;
+			}
+			section p {
+				margin: 0 0 1em;
+			}
+			section p:last-child {
+				margin-bottom: 0;
+			}
+			.outro {
+				margin: 0;
+				font-size: 0.95rem;
+			}
+			a {
+				color: rgb(var(--accent));
+			}
+		</style>
+	</head>
+	<body>
+		<Header />
+		<main class="page-shell">
+			<header class="intro">
+				<p class="eyebrow">About</p>
+				<h1>An NBA tracker that keeps its own numbers.</h1>
+				<p class="lede">
+					{SITE_TITLE} has two halves: a tracker for the NBA slate, and a catalogue of drills for
+					the training sessions behind it. The scores on these pages are read from the site's own
+					cache, not fetched from the provider while you wait.
+				</p>
+			</header>
 
-	<p>
-		The goal is not to publish perfection, but to document useful lessons while they are still fresh.
-		That means writing about process, decision-making, trade-offs, and the moments when a small change
-		creates a noticeably better experience for people.
-	</p>
+			<section>
+				<h2>Where the numbers come from</h2>
+				<p>
+					The games come from balldontlie, fetched by the server rather than by the browser. A slate
+					is refreshed at most once a minute while a game is in progress, and not at all for half a
+					day once it has settled, so a page you open twice costs one request instead of two. Every
+					call is counted against a shared daily budget: a busy day degrades into older numbers
+					rather than a dead key.
+				</p>
+				<p>
+					Each page prints the age of the snapshot it rendered. When a refresh is refused, the page
+					shows the last numbers it has and says the feed could not be reached, because a stale score
+					that announces itself is more useful than an error page.
+				</p>
+			</section>
 
-	<p>
-		This blog is a blend of personal notes and practical references: some pieces are reflections on
-		what worked, some are experiments in how to build better systems, and others are reminders that
-		good design often comes from patience, iteration, and clear communication.
-	</p>
+			<section>
+				<h2>What a game page shows</h2>
+				<p>
+					The line score, quarter by quarter, with an overtime column when the game needed one.
+					Tip-off, the stage — regular season, playoffs or the NBA Cup round — and both teams with
+					the division and conference on file. While a game is being played it also shows timeouts
+					remaining and which team is in the bonus, and those two rows disappear once the game is
+					final: upstream leaves a finished game's last values in place, and repeating them would
+					describe play that is over.
+				</p>
+			</section>
 
-	<p>
-		If you are a builder, a designer, or someone who enjoys learning from how others work, you will
-		likely find something here worth revisiting. The writing is intentionally grounded in real work,
-		clear thinking, and the messy reality of making useful things in public.
-	</p>
-</Layout>
+			<section>
+				<h2>What is deliberately missing</h2>
+				<p>
+					There is no box score yet. The provider plan behind this deployment does not include the
+					statistics endpoint, so the game page says the box score is not available rather than
+					filling a table with numbers nobody measured. The scores and quarter lines above it are
+					real and come from the cache.
+				</p>
+			</section>
+
+			<section>
+				<h2>The drills</h2>
+				<p>
+					The catalogue beside the tracker is content, not a table: one markdown file per drill,
+					each naming the measures a logged session records — makes and attempts, sets, reps, or
+					weight — so a drill cannot promise a number the database has nowhere to put. Adding one
+					is a pull request that adds a file.
+				</p>
+			</section>
+
+			<p class="outro">
+				The site is an Astro app rendered on the server and deployed to ECS by CDK, and every change
+				reaches it through a pull request and a pipeline. <a href="/nba">Start with today's slate</a>,
+				or <a href="/drills">browse the drills</a>.
+			</p>
+		</main>
+		<Footer />
+	</body>
+</html>
