@@ -8,7 +8,8 @@
  *   1. required artifacts exist (index.html, the blog index and every blog
  *      post, the drill index and every drill, rss.xml, sitemap-index.xml);
  *   2. every internal link in every generated page resolves to a real file in
- *      dist/client.
+ *      dist/client, or to a route the server renders rather than CloudFront --
+ *      `/nba` is in the header of every static page and has no file here.
  *
  * Exit code 1 on any problem, with one line per failure, so CI logs point
  * straight at the offending page.
@@ -18,6 +19,7 @@ import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CLIENT = path.join(ROOT, 'dist', 'client');
+const PAGES = path.join(ROOT, 'src', 'pages');
 const CONTENT_BLOG = path.join(ROOT, 'src', 'content', 'blog');
 const CONTENT_DRILLS = path.join(ROOT, 'src', 'content', 'drills');
 
@@ -68,8 +70,9 @@ function extractRefs(html) {
 }
 
 /**
- * Turn an href into a path inside dist/client, or null when it is not an
- * internal reference we can check (external host, mailto:, fragment-only, ...).
+ * Turn an href into the URL path it asks for plus its place in dist/client, or
+ * null when it is not an internal reference we can check (external host,
+ * mailto:, fragment-only, ...).
  */
 function toLocalPath(href, fromFile, host) {
 	if (!href || href.startsWith('#')) return null;
@@ -109,7 +112,43 @@ function toLocalPath(href, fromFile, host) {
 	} catch {
 		decoded = pathname; // malformed %-escapes: check it literally
 	}
-	return path.join(CLIENT, decoded);
+	return { pathname: decoded, target: path.join(CLIENT, decoded) };
+}
+
+/**
+ * Routes the container renders, read from the pages that opt out of
+ * prerendering (`export const prerender = false`). A link to one of these is
+ * served by the SSR container, so it has no file in dist/client and is not a
+ * broken link. `[param]` segments match one path segment each.
+ */
+function serverRoutes() {
+	const routes = [];
+	for (const file of walk(PAGES)) {
+		if (!/\.(astro|ts|js|mjs)$/.test(file)) continue;
+		if (!/export\s+const\s+prerender\s*=\s*false/.test(readFileSync(file, 'utf8'))) continue;
+
+		const segments = path
+			.relative(PAGES, file)
+			.split(path.sep)
+			.join('/')
+			.replace(/\.(astro|ts|js|mjs)$/, '')
+			.split('/');
+		if (segments[segments.length - 1] === 'index') segments.pop();
+		routes.push('/' + segments.join('/'));
+	}
+	return routes;
+}
+
+/** True when the URL path is one of the server's own routes. */
+function isServerRoute(pathname, routes) {
+	const wanted = pathname.replace(/\/+$/, '').split('/').filter(Boolean);
+	return routes.some((route) => {
+		const pattern = route.split('/').filter(Boolean);
+		return (
+			pattern.length === wanted.length &&
+			pattern.every((segment, index) => /^\[.+\]$/.test(segment) || segment === wanted[index])
+		);
+	});
 }
 
 /** A URL is served if it maps to a file: exact path, directory index, or .html. */
@@ -181,6 +220,7 @@ for (const drill of drills) {
 // --- 2. internal link integrity -------------------------------------------
 
 const host = siteHost();
+const routes = serverRoutes();
 const pages = walk(CLIENT).filter((file) => file.endsWith('.html'));
 let checked = 0;
 
@@ -189,12 +229,12 @@ for (const page of pages) {
 	const refs = extractRefs(html);
 
 	for (const href of refs) {
-		const target = toLocalPath(href, page, host);
-		if (!target) continue;
+		const ref = toLocalPath(href, page, host);
+		if (!ref) continue;
 		checked++;
-		if (!resolvesToFile(target)) {
-			fail(`broken link on ${path.relative(CLIENT, page)}: ${href}`);
-		}
+		if (resolvesToFile(ref.target)) continue;
+		if (isServerRoute(ref.pathname, routes)) continue;
+		fail(`broken link on ${path.relative(CLIENT, page)}: ${href}`);
 	}
 }
 
