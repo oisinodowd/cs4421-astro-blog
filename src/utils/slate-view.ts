@@ -83,11 +83,13 @@ export interface QuarterLine {
 }
 
 /**
- * The line score, one row per quarter plus the total.
+ * The line score: one row per quarter, one per overtime period played, and the
+ * total.
  *
- * A quarter upstream has not played is null and the page prints an em dash; the
- * total is the score, so a game in overtime still sums to more than its four
- * quarters and the table does not pretend otherwise.
+ * A quarter upstream has not played is null and the page prints an em dash. An
+ * overtime column appears only when the game went to overtime, which is what
+ * keeps the columns adding up to the total instead of leaving the total looking
+ * like a miscount on a game that needed an extra period.
  */
 export function quarterLines(game: CachedGame): QuarterLine[] {
 	const rows: QuarterLine[] = game.homeQuarters.map((home, index) => ({
@@ -95,8 +97,92 @@ export function quarterLines(game: CachedGame): QuarterLine[] {
 		home,
 		visitor: game.visitorQuarters[index] ?? null,
 	}));
+
+	const periods = Math.max(game.homeOvertimes.length, game.visitorOvertimes.length);
+	for (let index = 0; index < periods; index += 1) {
+		rows.push({
+			label: index === 0 ? 'OT' : `${index + 1}OT`,
+			home: game.homeOvertimes[index] ?? null,
+			visitor: game.visitorOvertimes[index] ?? null,
+		});
+	}
+
 	rows.push({ label: 'T', home: game.homeScore, visitor: game.visitorScore });
 	return rows;
+}
+
+/**
+ * What the game is part of: the playoffs, or the NBA Cup stage upstream named.
+ *
+ * Upstream sends the stage as a machine name (`group_stage`), which is not
+ * something to print at a reader, so it is spelled out with its first letter
+ * raised. Anything unreadable is no label rather than a raw field name.
+ */
+export function stageLabel(game: CachedGame): string | null {
+	if (game.postseason) return 'Playoffs';
+	if (game.istStage === null) return null;
+
+	const words = game.istStage.replace(/[_-]+/g, ' ').trim();
+	if (words === '') return null;
+	return `NBA Cup · ${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+}
+
+/**
+ * The scheduled tip-off, in the tracker's zone and with the zone named.
+ *
+ * Upstream sends an instant (`2026-10-25T21:00:00Z`); the date is included
+ * because a slate span can reach past midnight, and a game that has ended still
+ * needs to say when it started. An unreadable value is nothing, not a guess.
+ */
+export function formatTipOff(value: string | null): string | null {
+	if (value === null) return null;
+	const at = Date.parse(value);
+	if (!Number.isFinite(at)) return null;
+
+	const parts = new Intl.DateTimeFormat('en-US', {
+		timeZone: TRACKER_TIME_ZONE,
+		weekday: 'short',
+		day: 'numeric',
+		month: 'short',
+		year: 'numeric',
+		hour: 'numeric',
+		minute: '2-digit',
+		hour12: true,
+	}).formatToParts(new Date(at));
+	const part = (type: Intl.DateTimeFormatPartTypes) =>
+		parts.find((entry) => entry.type === type)?.value ?? '';
+	return `${part('weekday')} ${part('day')} ${part('month')} ${part('year')} · ${part('hour')}:${part('minute')} ${part('dayPeriod')} ET`;
+}
+
+export interface LiveState {
+	visitorTimeouts: number | null;
+	homeTimeouts: number | null;
+	visitorInBonus: boolean | null;
+	homeInBonus: boolean | null;
+}
+
+/**
+ * Timeouts and the bonus, which only describe a game while it is being played.
+ *
+ * Upstream leaves a finished game's last values in the payload -- a Final still
+ * reports a team in the bonus -- so printing them for a settled game would be
+ * describing play that is over. Nothing to say is null, not a row of dashes.
+ */
+export function liveState(game: CachedGame, status: GameStatus): LiveState | null {
+	if (!status.live) return null;
+
+	const state: LiveState = {
+		visitorTimeouts: game.visitorTimeoutsRemaining,
+		homeTimeouts: game.homeTimeoutsRemaining,
+		visitorInBonus: game.visitorInBonus,
+		homeInBonus: game.homeInBonus,
+	};
+	const empty =
+		state.visitorTimeouts === null &&
+		state.homeTimeouts === null &&
+		state.visitorInBonus === null &&
+		state.homeInBonus === null;
+	return empty ? null : state;
 }
 
 /** The team's short name, or `TBD` when the embed matched nothing. */

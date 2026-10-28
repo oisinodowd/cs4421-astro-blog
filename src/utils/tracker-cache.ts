@@ -51,6 +51,26 @@ export interface CachedGame {
 	homeQuarters: Array<number | null>;
 	visitorQuarters: Array<number | null>;
 	/**
+	 * Overtime, only for the periods this game actually played. Empty for a game
+	 * that finished in regulation, so the line score grows a column when there is
+	 * something to put in it rather than printing three empty ones on every game.
+	 */
+	homeOvertimes: Array<number | null>;
+	visitorOvertimes: Array<number | null>;
+	/** Upstream's scheduled tip-off as an ISO instant, or null when it sent none. */
+	tipOffAt: string | null;
+	/** Upstream's `ist_stage`: which round of the NBA Cup this game belongs to. */
+	istStage: string | null;
+	/**
+	 * Live state, which upstream keeps reporting on a finished game (a Final still
+	 * says a team is in the bonus). Null means the game is not being played and
+	 * there is nothing current to say.
+	 */
+	homeInBonus: boolean | null;
+	visitorInBonus: boolean | null;
+	homeTimeoutsRemaining: number | null;
+	visitorTimeoutsRemaining: number | null;
+	/**
 	 * When the cache last saw this game. A page shows the age of it, so a stale
 	 * snapshot is never presented as the current score.
 	 */
@@ -256,6 +276,32 @@ export async function gameIdsWithStats(
 
 // --- mapping ----------------------------------------------------------------
 
+/**
+ * Overtime, which the schema does not model.
+ *
+ * `games` has a column per regulation quarter and none for overtime, so these
+ * come out of the payload the ingest keeps in `raw` -- see the note above
+ * `toGame` for why that is the one exception to the rule about `raw`.
+ * Trailing nulls are dropped, so a regulation game has no overtime at all.
+ */
+function overtimes(raw: Record<string, unknown> | null, side: 'home' | 'visitor'): Array<number | null> {
+	const played = [1, 2, 3].map((period) => readInteger(raw?.[`${side}_ot${period}`]));
+	while (played.length > 0 && played[played.length - 1] === null) played.pop();
+	return played;
+}
+
+/**
+ * What the schema does not model is read from `raw`: overtime periods, the cup
+ * stage and the tip-off instant.
+ *
+ * `games` calls `raw` a debugging aid rather than a source the page renders
+ * from, and that holds for everything the table has a column for. These three
+ * are the deliberate exception (#99): each is display-only, upstream sends it
+ * on every game, and a column would have to be migrated before the deploy that
+ * reads it -- the ingest writes the whole row, so a database without the new
+ * column would reject the upsert and freeze the slate. Nothing here is guessed:
+ * a payload without the field reads as null and the page says less.
+ */
 function toGame(row: unknown): Result<CachedGame> {
 	if (!isRecord(row)) return failure('error', 'expected a game row');
 
@@ -267,6 +313,10 @@ function toGame(row: unknown): Result<CachedGame> {
 	if (id === null || !Number.isInteger(id) || gameDate === null || status === null || ingestedAt === null) {
 		return failure('error', 'a game row is missing a field: id, game_date, status, ingested_at');
 	}
+
+	const raw = isRecord(row.raw) ? row.raw : null;
+	const bonus = isRecord(row.in_bonus) ? row.in_bonus : null;
+	const timeouts = isRecord(row.timeouts_remaining) ? row.timeouts_remaining : null;
 
 	return success({
 		id,
@@ -281,6 +331,17 @@ function toGame(row: unknown): Result<CachedGame> {
 		visitorScore: readInteger(row.visitor_score),
 		homeQuarters: [row.home_q1, row.home_q2, row.home_q3, row.home_q4].map(readInteger),
 		visitorQuarters: [row.visitor_q1, row.visitor_q2, row.visitor_q3, row.visitor_q4].map(readInteger),
+		homeOvertimes: overtimes(raw, 'home'),
+		visitorOvertimes: overtimes(raw, 'visitor'),
+		tipOffAt: readString(raw?.datetime),
+		istStage: readString(raw?.ist_stage),
+		// `in_bonus` and `timeouts_remaining` are stored as `{ home, visitor }`
+		// because their shape has moved between seasons, so each side is read on
+		// its own and an absent side stays null rather than becoming false.
+		homeInBonus: readBoolean(bonus?.home),
+		visitorInBonus: readBoolean(bonus?.visitor),
+		homeTimeoutsRemaining: readInteger(timeouts?.home),
+		visitorTimeoutsRemaining: readInteger(timeouts?.visitor),
 		ingestedAt,
 	});
 }
@@ -357,4 +418,8 @@ function readInteger(value: unknown): number | null {
 	const parsed = readNumber(value);
 	if (parsed === null || !Number.isInteger(parsed)) return null;
 	return parsed;
+}
+
+function readBoolean(value: unknown): boolean | null {
+	return typeof value === 'boolean' ? value : null;
 }

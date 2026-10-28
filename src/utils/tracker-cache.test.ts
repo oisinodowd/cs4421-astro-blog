@@ -99,8 +99,70 @@ describe('listGamesOn', () => {
 			visitorScore: 48,
 			homeQuarters: [28, 23, null, null],
 			visitorQuarters: [25, 23, null, null],
+			homeOvertimes: [],
+			visitorOvertimes: [],
+			tipOffAt: null,
+			istStage: null,
+			homeInBonus: false,
+			visitorInBonus: true,
+			homeTimeoutsRemaining: null,
+			visitorTimeoutsRemaining: null,
 			ingestedAt: '2026-10-27T21:00:00.000Z',
 		});
+	});
+
+	it('reads the overtime, the cup stage and the tip-off out of the kept payload', async () => {
+		// Overtime has no column in `games`, so the ingest keeps it in `raw`; the
+		// mapper reads it from there rather than pretending a 4-quarter game and an
+		// overtime one have the same line score.
+		const fake = fakeWithGames([
+			{
+				...GAME_ROW,
+				raw: {
+					id: 2234,
+					datetime: '2026-10-27T23:30:00.000Z',
+					ist_stage: 'group_stage',
+					home_ot1: 8,
+					visitor_ot1: 11,
+					home_ot2: null,
+					visitor_ot2: null,
+				},
+			},
+		]);
+		const result = await listGamesOn('2026-10-27', { client: fake.asClient() });
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		const [game] = result.value;
+		expect(game?.homeOvertimes).toEqual([8]);
+		expect(game?.visitorOvertimes).toEqual([11]);
+		expect(game?.tipOffAt).toBe('2026-10-27T23:30:00.000Z');
+		expect(game?.istStage).toBe('group_stage');
+	});
+
+	it('drops overtime the game did not play instead of keeping empty periods', async () => {
+		const fake = fakeWithGames([
+			{
+				...GAME_ROW,
+				raw: { id: 2234, home_ot1: null, visitor_ot1: null, home_ot2: null, visitor_ot2: null },
+			},
+		]);
+		const result = await listGamesOn('2026-10-27', { client: fake.asClient() });
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.value[0]?.homeOvertimes).toEqual([]);
+		expect(result.value[0]?.visitorOvertimes).toEqual([]);
+	});
+
+	it('leaves the live state null when the row carried no bonus or timeouts', async () => {
+		const fake = fakeWithGames([{ ...GAME_ROW, in_bonus: null, timeouts_remaining: null }]);
+		const result = await listGamesOn('2026-10-27', { client: fake.asClient() });
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.value[0]?.homeInBonus).toBeNull();
+		expect(result.value[0]?.visitorInBonus).toBeNull();
 	});
 
 	it('asks for the two team embeds by foreign key, so home and visitor cannot swap', async () => {
